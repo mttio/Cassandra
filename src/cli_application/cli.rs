@@ -53,7 +53,7 @@ pub async fn run() -> Result<()> {
 
 
     // Load policy
-    let base_policy_path = Path::new("/policies");
+    let base_policy_path = Path::new("./policies");
     let content = fs::read_to_string(base_policy_path.join(&args.policy))
             .with_context(|| format!("Failed to read policy file: {:?}", &args.policy))?;
     let policy: Policy = serde_json::from_str(&content).context("Failed to parse policy file")?;
