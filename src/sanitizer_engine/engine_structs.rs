@@ -10,6 +10,13 @@ pub enum InputSource {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Content {
+    pub source: InputSource,
+    pub data: Vec<u8>,
+    pub content_type: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Policy {
     //to be implemented
 }
