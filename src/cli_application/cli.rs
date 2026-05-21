@@ -6,11 +6,12 @@ local HTML/asset files, a directory tree, or a list of URLs to fetch
 use std::path::{Path, PathBuf};
 use std::fs;
 use clap::Parser;
+use crate::sanitizer_engine::engine_structs::InputSource;
+use crate::sanitizer_engine::policy::Policy;
 use anyhow::{Context, Result};
 use url::Url;
 use walkdir::WalkDir;
 use serde_json;
-use crate::sanitizer_engine::engine_structs::{InputSource, Policy};
 
 
 
@@ -52,7 +53,7 @@ pub async fn run() -> Result<()> {
 
 
     // Load policy
-    let base_policy_path = Path::new("/policies");
+    let base_policy_path = Path::new("./policies");
     let content = fs::read_to_string(base_policy_path.join(&args.policy))
             .with_context(|| format!("Failed to read policy file: {:?}", &args.policy))?;
     let policy: Policy = serde_json::from_str(&content).context("Failed to parse policy file")?;
