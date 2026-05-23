@@ -197,6 +197,14 @@ dependencies = [
 [[package]]
 name = "core-foundation"
 version = "0.9.4"
+name = "either"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "errno"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91e195e091a93c46f7102ec7818a2aa394e1e1771c3ab4825963fa03e45afb8f"
 dependencies = [
@@ -209,6 +217,9 @@ name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
+name = "form_urlencoded"
+version = "1.2.2"
+source = "git+https://github.com/psyvern/rust-url.git#e835731b0b3c402a0663465109cf6f08cb27baf3"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -302,6 +313,9 @@ name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+name = "idna"
+version = "1.1.0"
+source = "git+https://github.com/psyvern/rust-url.git#e835731b0b3c402a0663465109cf6f08cb27baf3"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -349,6 +363,17 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 [[package]]
 name = "form_urlencoded"
 version = "1.2.2"
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itoa"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
@@ -489,6 +514,9 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+name = "percent-encoding"
+version = "2.3.2"
+source = "git+https://github.com/psyvern/rust-url.git#e835731b0b3c402a0663465109cf6f08cb27baf3"
 
 [[package]]
 name = "heck"
@@ -2215,6 +2243,16 @@ name = "windows_aarch64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
+name = "url"
+version = "2.5.8"
+source = "git+https://github.com/psyvern/rust-url.git#e835731b0b3c402a0663465109cf6f08cb27baf3"
+dependencies = [
+ "form_urlencoded",
+ "idna",
+ "percent-encoding",
+ "serde",
+ "serde_derive",
+]
 
 [[package]]
 name = "windows_i686_gnu"
@@ -2276,6 +2314,15 @@ dependencies = [
  "anyhow",
  "heck",
  "wit-parser",
+ "clap",
+ "itertools",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "walkdir",
 ]
 
 [[package]]
