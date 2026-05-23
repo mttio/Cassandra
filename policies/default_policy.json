@@ -22,7 +22,7 @@
     "max_requests": 5
   },
   "timeouts": {
-    "connection_timeout_secs": 3,
-    "overall_timeout_secs": 15
+    "connection_timeout": "3s",
+    "overall_timeout": "15s"
   }
 }

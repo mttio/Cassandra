@@ -127,14 +127,14 @@ impl SanitizerHttpClient {
         let ssrf_safe_resolver = SsrfSafeDnsResolver {
             inner: Arc::new(resolver),
             // Reuse the connection timeout for DNS. This avoids an extra policy field
-            timeout: Duration::from_secs(policy.timeouts.connection_timeout_secs),
+            timeout: policy.timeouts.connection_timeout,
         };
 
         let client = Client::builder()
             // Set custom Ip resolver
             .dns_resolver(Arc::new(ssrf_safe_resolver))
-            .connect_timeout(Duration::from_secs(policy.timeouts.connection_timeout_secs))
-            .timeout(Duration::from_secs(policy.timeouts.overall_timeout_secs))
+            .connect_timeout(policy.timeouts.connection_timeout)
+            .timeout(policy.timeouts.overall_timeout)
             // Disable redirects
             .redirect(redirect::Policy::none())
             // Enforce TLS 1.2+

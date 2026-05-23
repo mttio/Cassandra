@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::Deserialize;
 use url::Host;
 
@@ -99,15 +101,17 @@ impl Default for ResourcesPolicy {
 
 #[derive(Debug, Deserialize)]
 pub struct TimeoutsPolicy {
-    pub connection_timeout_secs: u64,
-    pub overall_timeout_secs: u64,
+    #[serde(with = "humantime_serde")]
+    pub connection_timeout: Duration,
+    #[serde(with = "humantime_serde")]
+    pub overall_timeout: Duration,
 }
 
 impl Default for TimeoutsPolicy {
     fn default() -> Self {
         Self {
-            connection_timeout_secs: 3,
-            overall_timeout_secs: 15,
+            connection_timeout: Duration::from_secs(3),
+            overall_timeout: Duration::from_secs(15),
         }
     }
 }
