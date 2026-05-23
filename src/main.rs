@@ -13,7 +13,9 @@ async fn main() {
     println!("======= WELCOME TO THE WEB SANITIZER CLI INTERFACE =======");
 
     //run cli application
-    let _ = cli::run().await; 
+    if let Err(e) = cli::run().await {
+        eprintln!("Application error: {:?}", e);
+    }
 
     println!("======================== GOODBYE =========================");
 }

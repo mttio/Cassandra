@@ -8,12 +8,17 @@
   "urls": {
     "block_list": ["malicious-domain.com", "evil.com"],
     "rewrite_suspicious": true,
-    "allow_idn": false
+    "allow_idn": false,
+    "replace_homography": true
   },
   "resources": {
     "fetch_sub_resources": true,
     "max_depth": 1,
     "max_bytes": 1048576,
     "max_requests": 5
+  },
+  "timeouts": {
+    "connection_timeout_secs": 3,
+    "overall_timeout_secs": 15
   }
 }
