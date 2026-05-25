@@ -1,9 +1,11 @@
-use std::time::Duration;
+use std::{error::Error, time::Duration};
 
 use serde::Deserialize;
 use url::Host;
 
-#[derive(Debug, Deserialize)]
+use crate::sanitizer_engine::errors::warn;
+
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyAction {
     Allow,
@@ -13,8 +15,24 @@ pub enum PolicyAction {
     Deny,
 }
 
-#[derive(Debug)]
-pub struct PolicyHost(Host);
+impl PolicyAction {
+    pub fn handle_error<E: Into<Box<dyn Error>>>(self, error: E) -> Result<(), E> {
+        match self {
+            PolicyAction::Allow | PolicyAction::Replace => {}
+            PolicyAction::Warn | PolicyAction::WarnAndReplace => {
+                warn(error);
+            }
+            PolicyAction::Deny => {
+                return Err(error);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct PolicyHost(pub Host);
 
 impl<'de> Deserialize<'de> for PolicyHost {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -33,7 +51,7 @@ pub struct Policy {
     pub html: HtmlPolicy,
     pub urls: UrlsPolicy,
     pub resources: ResourcesPolicy,
-    pub timeouts: TimeoutsPolicy,
+    pub connections: ConnectionsPolicy,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,18 +118,24 @@ impl Default for ResourcesPolicy {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TimeoutsPolicy {
+pub struct ConnectionsPolicy {
     #[serde(with = "humantime_serde")]
     pub connection_timeout: Duration,
     #[serde(with = "humantime_serde")]
     pub overall_timeout: Duration,
+    pub max_redirects: Option<usize>,
+    pub max_redirects_action: PolicyAction,
+    pub user_agent: String,
 }
 
-impl Default for TimeoutsPolicy {
+impl Default for ConnectionsPolicy {
     fn default() -> Self {
         Self {
             connection_timeout: Duration::from_secs(3),
             overall_timeout: Duration::from_secs(15),
+            max_redirects: Some(2),
+            max_redirects_action: PolicyAction::Deny,
+            user_agent: "CoolBot/0.0 (https://example.org/coolbot/; coolbot@example.org) generic-library/0.0".to_owned(),
         }
     }
 }
