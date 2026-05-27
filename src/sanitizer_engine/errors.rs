@@ -22,6 +22,20 @@ impl Display for DangerousDomain {
 }
 
 #[derive(Debug)]
+pub struct DangerousDomainInHtml(pub Host, pub usize);
+impl Error for DangerousDomainInHtml {}
+impl Display for DangerousDomainInHtml {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "dangerous domain ({}) @{}",
+            self.0.to_string().bright_cyan(),
+            self.1.to_string().bright_magenta(),
+        )
+    }
+}
+
+#[derive(Debug)]
 pub struct IDN(pub String);
 impl Error for IDN {}
 impl Display for IDN {
@@ -30,26 +44,15 @@ impl Display for IDN {
     }
 }
 
-pub fn trace<E: Into<Box<dyn Error>>>(error: E) {
-    println!(
-        "{}: {}",
-        "  TRACE".bright_black().bold(),
-        error.into().to_string().italic()
-    );
-}
-
-pub fn warn<E: Into<Box<dyn Error>>>(error: E) {
-    println!(
-        "{}: {}",
-        "WARNING".bright_yellow().bold(),
-        error.into().to_string().italic()
-    );
-}
-
-pub fn error<E: Into<Box<dyn Error>>>(error: E) {
-    println!(
-        "{}: {}",
-        "  ERROR".bright_red().bold(),
-        error.into().to_string().italic()
-    );
+#[derive(Debug)]
+pub struct ContentTooLong(pub usize);
+impl Error for ContentTooLong {}
+impl Display for ContentTooLong {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "response body exceeds maximum size limit of {} bytes",
+            self.0.to_string().bright_cyan()
+        )
+    }
 }

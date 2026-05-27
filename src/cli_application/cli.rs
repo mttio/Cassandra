@@ -3,19 +3,19 @@ The tool must accept one or more inputs
 local HTML/asset files, a directory tree, or a list of URLs to fetch
 */
 
-use crate::cli_application::http_client::fetch_multiple_urls;
+use crate::cli_application::http_client::SanitizerHttpClient;
 use crate::sanitizer_engine::engine_structs::InputSource;
-use crate::sanitizer_engine::errors::{DangerousDomain, IDN, error};
+use crate::sanitizer_engine::errors::{DangerousDomain, IDN};
+use crate::sanitizer_engine::log::{LogLevel, Logger};
 use crate::sanitizer_engine::policy::Policy;
 use crate::sanitizer_engine::url::{RuleMatch, check_domain};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use lol_html::{HtmlRewriter, Settings, element};
 use serde_json;
-use std::error::Error;
 use std::fs::{self, File};
-use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::task::JoinSet;
 use url::Url;
 use walkdir::WalkDir;
 
@@ -59,40 +59,21 @@ pub async fn run() -> Result<()> {
         None => Policy::default(),
     };
 
-    println!("Successfully loaded policy: {policy:#?}");
+    // println!("Successfully loaded policy: {policy:#?}");
+
+    // let subscriber = FmtSubscriber::builder()
+    //     .with_max_level(Level::TRACE)
+    //     .finish();
+
+    // tracing::subscriber::set_global_default(subscriber)?;
 
     // Prepare inputs
     let mut sources = Vec::new();
-
     for input in args.inputs {
         // Try to parse as URL first
         if let Ok(url) = Url::parse(&input)
             && (url.scheme() == "http" || url.scheme() == "https")
         {
-            {
-                if let Some(original) = check_domain(&url)
-                    && let Err(e) = policy.urls.idn_action.handle_error(IDN(original))
-                {
-                    error(e);
-                    continue;
-                }
-
-                if let Some(host) = url.host().map(|x| x.to_owned())
-                    && policy
-                        .urls
-                        .dangerous_domains
-                        .iter()
-                        .any(|x| host.matches(&x.0))
-                    && let Err(e) = policy
-                        .connections
-                        .dangerous_domain_action
-                        .handle_error(DangerousDomain(host.to_owned()))
-                {
-                    error(e);
-                    continue;
-                }
-            }
-
             println!("Input '{}' recognized as URL", input);
             sources.push(InputSource::Url(url.clone()));
         } else {
@@ -125,74 +106,67 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("Successfully created input sources vector: {:?}", sources);
+    // println!("Successfully created input sources vector: {:?}", sources);
 
-    let result = fetch_multiple_urls(sources, &policy).await.unwrap();
+    let client = SanitizerHttpClient::new(&policy).await?;
+    let client = Arc::new(client);
+    let policy = Arc::new(policy);
+    let max_size = (sources.len() as f64).log10().ceil() as usize;
 
-    for (i, data) in result.0.into_iter().enumerate() {
-        // let input = client.execute(client.get(url).build()?).await?;
-
-        let mut output = File::create(format!("./output/{i}.html"))?;
-
-        let mut rewriter = HtmlRewriter::new(
-            Settings {
-                element_content_handlers: vec![element!("a[href], link[href]", |el| {
-                    let href = el.get_attribute("href").expect("href was required");
-                    if let Ok(mut href) = Url::parse(&href)
-                        && let Some(host) = href.host()
+    let mut tasks = JoinSet::new();
+    sources.into_iter().enumerate().for_each(|(i, source)| {
+        let logger = Logger {
+            path: Arc::new(PathBuf::new()),
+            index: i,
+            max_size,
+        };
+        let output = File::create(args.output_dir.join(format!("{i}.html"))).unwrap();
+        let client = Arc::clone(&client);
+        let policy = Arc::clone(&policy);
+        tasks.spawn(async move {
+            let data = if let InputSource::Url(url) = source {
+                {
+                    if let Some(original) = check_domain(&url)
+                        && let Err(e) = policy.urls.idn_action.handle_error(&logger, IDN(original))
                     {
-                        let host = host.to_owned();
-                        let is_dangerous = policy
+                        logger.error(e);
+                        return;
+                    }
+
+                    if let Some(host) = url.host().map(|x| x.to_owned())
+                        && policy
                             .urls
                             .dangerous_domains
                             .iter()
-                            .any(|x| x.0.matches(&host));
-
-                        if is_dangerous {
-                            let result = policy.html.dangerous_domain_action.handle_error_with(
-                                || -> Result<_, Box<dyn Error>> {
-                                    href.set_host(Some("example.com"))?;
-                                    el.set_attribute("href", href.as_ref())?;
-                                    Ok(())
-                                },
-                                DangerousDomain(host.to_owned()),
-                            );
-
-                            match result {
-                                Err(e) => error(e),
-                                Ok(Some(Err(e))) => error(e),
-                                _ => {}
-                            }
-                        }
+                            .any(|x| host.matches(&x.0))
+                        && let Err(e) = policy
+                            .connections
+                            .dangerous_domain_action
+                            .handle_error(&logger, DangerousDomain(host.to_owned()))
+                    {
+                        logger.error(e);
+                        return;
                     }
+                }
 
-                    Ok(())
-                })],
-                ..Settings::new()
-            },
-            |c: &[u8]| {
-                // println!("{}\n", str::from_utf8(c).unwrap());
-                output.write_all(c).unwrap();
-            },
-        );
+                match client.fetch_one_url(&url, &logger, output, &policy).await {
+                    Ok(res) => Ok(res),
+                    Err(e) => Err(anyhow!("Could not fetch url {}: {}", url, e)),
+                }
+            } else {
+                Err(anyhow!("Moribus"))
+            };
 
-        /* {
-            use futures_util::StreamExt;
-            let mut input = input.bytes_stream();
-
-            while let Some(chunk) = input.next().await {
-                let chunk = chunk?;
-                rewriter.write(&chunk)?;
+            match data {
+                Ok(data) => {}
+                Err(error) => {
+                    logger.log(LogLevel::Error, error);
+                }
             }
-        } */
+        });
+    });
 
-        rewriter.write(&data.data)?;
-        rewriter.end()?;
-    }
-
-    for error in result.1 {
-        crate::sanitizer_engine::errors::error(error);
-    }
+    tasks.join_all().await;
 
     //Now for each source in sources we need to:
     //   if is FILE

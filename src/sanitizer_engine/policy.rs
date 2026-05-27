@@ -3,11 +3,35 @@ use std::{error::Error, time::Duration};
 use serde::Deserialize;
 use url::Host;
 
-use crate::sanitizer_engine::errors::{trace, warn};
+use crate::sanitizer_engine::log::Logger;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyAction {
+    Allow,
+    Warn,
+    Deny,
+}
+
+impl PolicyAction {
+    pub fn handle_error<E: Into<Box<dyn Error>>>(self, logger: &Logger, error: E) -> Result<(), E> {
+        match self {
+            Self::Allow => {
+                logger.info(error);
+                Ok(())
+            }
+            Self::Warn => {
+                logger.warn(error);
+                Ok(())
+            }
+            Self::Deny => Err(error),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyActionReplace {
     Allow,
     Replace,
     Warn,
@@ -15,52 +39,31 @@ pub enum PolicyAction {
     Deny,
 }
 
-impl PolicyAction {
-    pub fn handle_error<E: Into<Box<dyn Error>>>(self, error: E) -> Result<(), E> {
-        match self {
-            PolicyAction::Allow => {
-                trace(error);
-                Ok(())
-            }
-            PolicyAction::Replace => {
-                trace(error);
-                Ok(())
-            }
-            PolicyAction::Warn => {
-                warn(error);
-                Ok(())
-            }
-            PolicyAction::WarnAndReplace => {
-                warn(error);
-                Ok(())
-            }
-            PolicyAction::Deny => Err(error),
-        }
-    }
-
-    pub fn handle_error_with<T, F: FnOnce() -> T, E: Into<Box<dyn Error>>>(
+impl PolicyActionReplace {
+    pub fn handle_error<T, F: FnOnce() -> T, E: Into<Box<dyn Error>>>(
         self,
-        function: F,
+        logger: &Logger,
+        rewrite: F,
         error: E,
     ) -> Result<Option<T>, E> {
         match self {
-            PolicyAction::Allow => {
-                trace(error);
+            Self::Allow => {
+                logger.info(error);
                 Ok(None)
             }
-            PolicyAction::Replace => {
-                trace(error);
-                Ok(Some(function()))
+            Self::Replace => {
+                logger.info(error);
+                Ok(Some(rewrite()))
             }
-            PolicyAction::Warn => {
-                warn(error);
+            Self::Warn => {
+                logger.warn(error);
                 Ok(None)
             }
-            PolicyAction::WarnAndReplace => {
-                warn(error);
-                Ok(Some(function()))
+            Self::WarnAndReplace => {
+                logger.error(error);
+                Ok(Some(rewrite()))
             }
-            PolicyAction::Deny => Err(error),
+            Self::Deny => Err(error),
         }
     }
 }
@@ -95,7 +98,7 @@ pub struct HtmlPolicy {
     pub strip_event_handlers: bool,
     pub rewrite_dangerous_uris: bool,
     /// Action to perform when a dangerous domain is encountered
-    pub dangerous_domain_action: PolicyAction,
+    pub dangerous_domain_action: PolicyActionReplace,
 }
 
 impl Default for HtmlPolicy {
@@ -109,7 +112,7 @@ impl Default for HtmlPolicy {
                 .collect(),
             strip_event_handlers: true,
             rewrite_dangerous_uris: true,
-            dangerous_domain_action: PolicyAction::WarnAndReplace,
+            dangerous_domain_action: PolicyActionReplace::WarnAndReplace,
         }
     }
 }
@@ -141,6 +144,7 @@ pub struct ResourcesPolicy {
     pub fetch_sub_resources: bool,
     pub max_depth: usize,
     pub max_bytes: usize,
+    pub max_bytes_action: PolicyAction,
     pub max_requests: usize,
 }
 
@@ -150,6 +154,7 @@ impl Default for ResourcesPolicy {
             fetch_sub_resources: true,
             max_depth: 1,
             max_bytes: 1024 * 1024,
+            max_bytes_action: PolicyAction::Deny,
             max_requests: 5,
         }
     }

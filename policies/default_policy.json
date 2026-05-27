@@ -21,7 +21,8 @@
   "resources": {
     "fetch_sub_resources": true,
     "max_depth": 1,
-    "max_bytes": 1048576,
+    "max_bytes": 102400,
+    "max_bytes_action": "warn",
     "max_requests": 5
   },
   "connections": {
