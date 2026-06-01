@@ -1,7 +1,9 @@
 use crate::sanitizer_engine::engine_structs::{FetchedContent, InputSource};
-use crate::sanitizer_engine::errors::{ContentTooLong, DangerousDomain, IDN, TooManyRedirects};
+use crate::sanitizer_engine::errors::{
+    ContentTooLong, DangerousDomain, IDN, LoggerError, TooManyRedirects,
+};
 use crate::sanitizer_engine::html::create_rewriter;
-use crate::sanitizer_engine::log::Logger;
+use crate::sanitizer_engine::log::{Logger, LoggerMessage};
 use crate::sanitizer_engine::policy::Policy;
 use crate::sanitizer_engine::url::{RuleMatch, check_domain};
 use anyhow::{Context, Result, anyhow};
@@ -10,10 +12,11 @@ use hickory_resolver::TokioResolver;
 use itertools::Itertools;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{Client, header, redirect};
+use std::collections::HashMap;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use url::Url;
 
@@ -120,7 +123,11 @@ pub struct SanitizerHttpClient {
 
 impl SanitizerHttpClient {
     /// Creates a new SanitizerHttpClient instance
-    pub async fn new(policy: &Policy) -> Result<Self> {
+    pub async fn new(
+        policy: &Policy,
+        channel: Sender<LoggerMessage>,
+        url_map: Arc<Mutex<HashMap<Url, usize>>>,
+    ) -> Result<Self> {
         let resolver = TokioResolver::builder_tokio()
             .context("Failed to create DNS resolver builder")?
             .build()
@@ -133,20 +140,45 @@ impl SanitizerHttpClient {
         };
 
         let max_redirects = policy.connections.max_redirects;
-        let max_redirects_action = policy.connections.max_redirects_action;
         let dangerous_hosts = policy
             .urls
             .dangerous_domains
             .iter()
             .map(|x| x.0.clone())
             .collect_vec();
-        let dangerous_domain_action = policy.connections.dangerous_domain_action;
-        let idn_action = policy.urls.idn_action;
+        let dangerous_domain_action = policy.connections.dangerous_domain;
+        let idn = policy.urls.idn;
 
-        let logger = Logger {
-            path: Arc::new(PathBuf::new()),
-            index: 0,
-            max_size: 1,
+        let closure = move |attempt: redirect::Attempt<'_>| {
+            let mutex = url_map.lock().unwrap();
+            let index = mutex
+                .get(attempt.previous().first().unwrap_or(attempt.url()))
+                .unwrap();
+
+            let logger = (*index, &channel);
+
+            let check = || -> Result<(), LoggerError> {
+                if let Some(original) = check_domain(attempt.url()) {
+                    idn.handle(&logger, IDN(original))?;
+                }
+
+                if attempt.previous().len() == max_redirects.value + 1 {
+                    max_redirects.handle(&logger, TooManyRedirects)?;
+                }
+
+                if let Some(host) = attempt.url().host().map(|x| x.to_owned())
+                    && dangerous_hosts.iter().any(|x| host.matches(x))
+                {
+                    dangerous_domain_action.handle(&logger, DangerousDomain(host.to_owned()))?;
+                }
+
+                Ok(())
+            };
+
+            match check() {
+                Ok(_) => attempt.follow(),
+                Err(e) => attempt.error(e),
+            }
         };
 
         let client = Client::builder()
@@ -156,33 +188,7 @@ impl SanitizerHttpClient {
             .timeout(policy.connections.overall_timeout)
             .user_agent(&policy.connections.user_agent)
             // Disable redirects
-            .redirect(redirect::Policy::custom(move |attempt| {
-                let check = || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-                    if let Some(original) = check_domain(attempt.url()) {
-                        idn_action.handle_error(&logger, IDN(original))?;
-                    }
-
-                    if let Some(max_redirects) = max_redirects
-                        && attempt.previous().len() == max_redirects + 1
-                    {
-                        max_redirects_action.handle_error(&logger, TooManyRedirects)?;
-                    }
-
-                    if let Some(host) = attempt.url().host().map(|x| x.to_owned())
-                        && dangerous_hosts.iter().any(|x| host.matches(x))
-                    {
-                        dangerous_domain_action
-                            .handle_error(&logger, DangerousDomain(host.to_owned()))?;
-                    }
-
-                    Ok(())
-                };
-
-                match check() {
-                    Ok(_) => attempt.follow(),
-                    Err(e) => attempt.error(e),
-                }
-            }))
+            .redirect(redirect::Policy::custom(closure))
             // Enforce TLS 1.2+
             .min_tls_version(reqwest::tls::Version::TLS_1_2)
             .build()
@@ -219,15 +225,19 @@ impl SanitizerHttpClient {
 
         let max_bytes = policy.resources.max_bytes;
 
+        // Avoids printing the error more than once
+        let mut already_too_long = false;
+
         // Fast-fail for `Content-Length` header
         if let Some(length) = response
             .headers()
             .get(header::CONTENT_LENGTH)
             .and_then(|x| x.to_str().ok())
             .and_then(|x| x.parse::<usize>().ok())
-            && length > max_bytes
+            && length > max_bytes.value
         {
-            return Err(ContentTooLong(max_bytes).into());
+            max_bytes.handle(logger, ContentTooLong(max_bytes.value))?;
+            already_too_long = true;
         }
 
         let content_type = response
@@ -246,8 +256,9 @@ impl SanitizerHttpClient {
             let chunk = item.context("Error while streaming body")?;
 
             length += chunk.len();
-            if length > max_bytes {
-                return Err(ContentTooLong(max_bytes).into());
+            if !already_too_long && length > max_bytes.value {
+                max_bytes.handle(logger, ContentTooLong(max_bytes.value))?;
+                already_too_long = true;
             }
 
             rewriter.write(&chunk)?;
@@ -273,20 +284,20 @@ pub async fn fetch_multiple_urls(
     let mut results_vec = Vec::new();
     let mut errors_vec = Vec::<anyhow::Error>::new();
 
-    let client = SanitizerHttpClient::new(policy).await?;
+    // let client = SanitizerHttpClient::new(policy).await?;
 
-    for input_source in sources {
-        // if let InputSource::Url(url) = input_source {
-        //     match client.fetch_one_url(&url, policy).await {
-        //         Ok(res) => results_vec.push(res),
-        //         Err(e) => errors_vec.push(anyhow!(
-        //             "Could not fetch url {}: {}",
-        //             url,
-        //             e.source().unwrap().source().unwrap()
-        //         )),
-        //     }
-        // }
-    }
+    // for input_source in sources {
+    //     if let InputSource::Url(url) = input_source {
+    //         match client.fetch_one_url(&url, policy).await {
+    //             Ok(res) => results_vec.push(res),
+    //             Err(e) => errors_vec.push(anyhow!(
+    //                 "Could not fetch url {}: {}",
+    //                 url,
+    //                 e.source().unwrap().source().unwrap()
+    //             )),
+    //         }
+    //     }
+    // }
     Ok((results_vec, errors_vec))
 }
 

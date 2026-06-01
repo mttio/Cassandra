@@ -8,16 +8,15 @@ use crate::sanitizer_engine::concurrency::ThreadPool;
 use crate::sanitizer_engine::engine_structs::InputSource;
 use crate::sanitizer_engine::errors::{DangerousDomain, IDN};
 use crate::sanitizer_engine::html::create_rewriter;
-use crate::sanitizer_engine::log::{LogLevel, Logger};
+use crate::sanitizer_engine::log::{LogLevel, Logger, LoggerTrait, logging_thread};
 use crate::sanitizer_engine::policy::Policy;
 use crate::sanitizer_engine::url::{RuleMatch, check_domain};
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use serde_json;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use url::Url;
 use walkdir::WalkDir;
 
@@ -51,7 +50,7 @@ fn load_policy(path: Option<&PathBuf>) -> Result<Policy> {
         Some(path) => {
             let content = fs::read_to_string(path)
                 .with_context(|| format!("Failed to read policy file: {path:?}"))?;
-            serde_json::from_str(&content).context("Failed to parse policy file")?
+            toml::from_str(&content).context("Failed to parse policy file")?
         }
         None => Policy::default(),
     };
@@ -105,7 +104,7 @@ fn process_url(
     output_dir: &PathBuf,
 ) {
     if let Some(original) = check_domain(&url)
-        && let Err(e) = policy.urls.idn_action.handle_error(logger, IDN(original))
+        && let Err(e) = policy.urls.idn.handle(logger, IDN(original))
     {
         logger.error(e);
         return;
@@ -119,8 +118,8 @@ fn process_url(
             .any(|x| host.matches(&x.0))
         && let Err(e) = policy
             .connections
-            .dangerous_domain_action
-            .handle_error(logger, DangerousDomain(host.to_owned()))
+            .dangerous_domain
+            .handle(logger, DangerousDomain(host.to_owned()))
     {
         logger.error(e);
         return;
@@ -130,14 +129,17 @@ fn process_url(
     let output = match File::create(&output_path) {
         Ok(file) => file,
         Err(e) => {
-            logger.error(anyhow!("Failed to create output file {:?}: {}", output_path, e));
+            logger.error(anyhow!(
+                "Failed to create output file {:?}: {}",
+                output_path,
+                e
+            ));
             return;
         }
     };
 
-    let fetch_result = rt_handle.block_on(async {
-        client.fetch_one_url(&url, logger, output, policy).await
-    });
+    let fetch_result =
+        rt_handle.block_on(async { client.fetch_one_url(&url, logger, output, policy).await });
 
     if let Err(error) = fetch_result {
         logger.error(anyhow!("Could not fetch url {}: {}", url, error));
@@ -154,24 +156,27 @@ fn process_file(
 ) {
     let output_path = output_dir.join(format!("{index}.html"));
     let file_result = || -> Result<()> {
-        let input_file = File::open(&path)
-            .with_context(|| format!("Failed to open local file {:?}", path))?;
+        let input_file =
+            File::open(&path).with_context(|| format!("Failed to open local file {:?}", path))?;
         let mut reader = BufReader::new(input_file);
         let output_file = File::create(&output_path)
             .with_context(|| format!("Failed to create output file {:?}", output_path))?;
-        
+
         let mut rewriter = create_rewriter(logger, policy, output_file);
         let mut buffer = [0; 8192];
         loop {
-            let n = reader.read(&mut buffer)
+            let n = reader
+                .read(&mut buffer)
                 .with_context(|| format!("Failed to read chunk from file {:?}", path))?;
             if n == 0 {
                 break;
             }
-            rewriter.write(&buffer[..n])
+            rewriter
+                .write(&buffer[..n])
                 .map_err(|e| anyhow!("Rewriter write error: {:?}", e))?;
         }
-        rewriter.end()
+        rewriter
+            .end()
             .map_err(|e| anyhow!("Rewriter end error: {:?}", e))?;
         Ok(())
     }();
@@ -198,21 +203,40 @@ pub async fn run() -> Result<()> {
     fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("Failed to create output directory: {:?}", args.output_dir))?;
 
-    println!("Successfully created output directory: {:?}", args.output_dir);
+    println!(
+        "Successfully created output directory: {:?}",
+        args.output_dir
+    );
 
-    let client = Arc::new(SanitizerHttpClient::new(&policy).await?);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let url_map = Arc::new(Mutex::new(
+        sources
+            .iter()
+            .enumerate()
+            .flat_map(|(i, source)| match source {
+                InputSource::File(_) => None,
+                InputSource::Url(url) => Some((url.clone(), i)),
+            })
+            .collect(),
+    ));
+
+    let client = Arc::new(SanitizerHttpClient::new(&policy, tx.clone(), url_map).await?);
     let policy = Arc::new(policy);
     let max_size = (sources.len() as f64).log10().ceil() as usize;
 
-    let pool = ThreadPool::new(args.workers); 
+    let pool = ThreadPool::new(args.workers);
     let rt_handle = tokio::runtime::Handle::current();
     let output_dir = Arc::new(args.output_dir);
 
+    {
+        let policy = policy.clone();
+        pool.push_job(move || logging_thread(&policy, max_size, rx));
+    }
+
     sources.into_iter().enumerate().for_each(|(i, source)| {
         let logger = Logger {
-            path: Arc::new(PathBuf::new()),
             index: i,
-            max_size,
+            channel: tx.clone(),
         };
         let client = Arc::clone(&client);
         let policy = Arc::clone(&policy);
@@ -229,19 +253,15 @@ pub async fn run() -> Result<()> {
         });
     });
 
-    drop(pool); // This blocks until all jobs are executed
+    // Drop excess resources
+    drop(tx);
+    drop(client);
+
+    // This blocks until all jobs are executed
+    drop(pool);
 
     Ok(())
 }
-
-
-
-
-
-
-
-
-
 
 /*======================== HELPERS ============================*/
 
@@ -252,11 +272,6 @@ fn is_hidden(entry: &walkdir::DirEntry) -> bool {
         .map(|s| s.starts_with('.'))
         .unwrap_or(false)
 }
-
-
-
-
-
 
 /*======================== TESTS ============================*/
 
