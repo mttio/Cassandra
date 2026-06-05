@@ -11,10 +11,11 @@ use crate::sanitizer_engine::policy::Policy;
 use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::future::lazy;
+use parking_lot::Mutex;
 use std::fs::{self};
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use url::Url;
 use walkdir::WalkDir;
 

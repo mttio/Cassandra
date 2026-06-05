@@ -18,6 +18,7 @@ use crate::sanitizer_engine::resource_sanitizer::validate_mime;
 use crate::sanitizer_engine::url::RuleMatch;
 use crate::sanitizer_engine::url::check_domain;
 use anyhow::{Context, Result, anyhow};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
@@ -25,7 +26,6 @@ use std::io::BufReader;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
 use url::Url;
 
 /// Context tracking session progress, limits, and state for a single crawl/sanitization workflow.
@@ -74,8 +74,7 @@ impl CrawlSession {
 
         let remaining_bytes = {
             let max_bytes = self.policy.resources.max_bytes;
-            let total_bytes = self.total_bytes.lock().unwrap();
-            max_bytes.value.saturating_sub(*total_bytes)
+            max_bytes.value.saturating_sub(*self.total_bytes.lock())
         };
 
         if remaining_bytes == 0 {
@@ -97,7 +96,7 @@ impl CrawlSession {
             Err(e) => {
                 self.logger
                     .warn(anyhow!("Failed to fetch sub-resource {}: {}", url, e));
-                let total_bytes_val = *self.total_bytes.lock().unwrap();
+                let total_bytes_val = *self.total_bytes.lock();
                 if total_bytes_val + remaining_bytes >= self.policy.resources.max_bytes.value {
                     let err = ContentTooLong(self.policy.resources.max_bytes.value);
                     let _ = self.policy.resources.max_bytes.handle(&self.logger, err);
@@ -107,7 +106,7 @@ impl CrawlSession {
         };
 
         {
-            let mut total_bytes = self.total_bytes.lock().unwrap();
+            let mut total_bytes = self.total_bytes.lock();
             *total_bytes += fetched.data.len();
         }
 
@@ -172,12 +171,12 @@ impl CrawlSession {
         let max_requests = self.policy.resources.max_requests;
 
         {
-            let mut visited = self.url_map.lock().unwrap();
+            let mut visited = self.url_map.lock();
             if visited.contains_key(&url) {
                 return;
             }
 
-            let mut total_requests = self.total_requests.lock().unwrap();
+            let mut total_requests = self.total_requests.lock();
             *total_requests += 1;
             if *total_requests > max_requests.value {
                 // Log only the first time we hit the limit
@@ -298,12 +297,11 @@ impl CrawlSession {
 
         // Record the main HTML page request and visit
         {
-            let mut visited = self.url_map.lock().unwrap();
+            let mut visited = self.url_map.lock();
             visited.insert(url.clone(), index);
-            if url != final_base {
-                visited.insert(final_base.clone(), index);
-            }
-            let mut total_requests = self.total_requests.lock().unwrap();
+            visited.insert(final_base.clone(), index);
+
+            let mut total_requests = self.total_requests.lock();
             *total_requests += 1;
         }
 

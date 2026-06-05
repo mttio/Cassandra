@@ -7,12 +7,12 @@ use crate::sanitizer_engine::log::{Logger, LoggerMessage};
 use crate::sanitizer_engine::policy::Policy;
 use crate::sanitizer_engine::url::{RuleMatch, check_domain};
 use std::path::Path;
-use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
 use hickory_resolver::TokioResolver;
 use lol_html::errors::RewritingError;
+use parking_lot::Mutex;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{Client, header, redirect};
 use std::collections::HashMap;
@@ -183,12 +183,12 @@ impl SanitizerHttpClient {
             .user_agent(&policy.connections.user_agent)
             // Disable redirects
             .redirect(redirect::Policy::custom(move |attempt| {
-                let mutex = url_map.lock().unwrap();
-                let index = mutex
+                let index = url_map.lock();
+                let index = *index
                     .get(attempt.previous().first().unwrap_or(attempt.url()))
                     .unwrap();
 
-                let logger = (*index, &channel);
+                let logger = (index, &channel);
 
                 let check = || -> Result<(), LoggerError> {
                     if let Some(original) = check_domain(attempt.url()) {

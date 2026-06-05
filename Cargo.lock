@@ -2538,6 +2538,7 @@ dependencies = [
  "humantime-serde",
  "itertools",
  "lol_html",
+ "parking_lot",
  "reqwest",
  "serde",
  "strip-ansi-escapes",
