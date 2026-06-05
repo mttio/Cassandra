@@ -2,7 +2,7 @@ use crate::sanitizer_engine::engine_structs::{FetchedContent, InputSource};
 use crate::sanitizer_engine::errors::{
     ContentTooLong, DangerousDomain, IDN, LoggerError, TimeoutError, TooManyRedirects,
 };
-use crate::sanitizer_engine::html::create_rewriter;
+use crate::sanitizer_engine::html::{CrawlerState, create_rewriter};
 use crate::sanitizer_engine::log::{Logger, LoggerMessage};
 use crate::sanitizer_engine::policy::Policy;
 use crate::sanitizer_engine::url::{RuleMatch, check_domain};
@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
 use hickory_resolver::TokioResolver;
+use lol_html::errors::RewritingError;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{Client, header, redirect};
 use std::collections::HashMap;
@@ -228,92 +229,6 @@ impl SanitizerHttpClient {
         Ok(Self { client })
     }
 
-    /// Fetch a single URL and write its rewritten HTML stream directly to `output` file.
-    ///
-    /// # Inputs
-    /// * `url` - The remote URL to fetch.
-    /// * `logger` - The logging interface.
-    /// * `output` - The file handle to stream the rewritten HTML bytes into.
-    /// * `policy` - The security policy configuration.
-    ///
-    /// # Returns
-    /// * `Result<FetchedContent>` - An empty data `FetchedContent` struct on success, or an error if fetch/rewrite limits are exceeded.
-    #[allow(dead_code)]
-    pub async fn fetch_one_url(
-        &self,
-        url: &Url,
-        logger: &Logger,
-        output: File,
-        policy: &Policy,
-    ) -> Result<FetchedContent> {
-        if url.scheme() != "https" {
-            return Err(anyhow!("Only HTTPS URLs are permitted"));
-        }
-
-        let response = self
-            .client
-            .get(url.clone())
-            .send()
-            .await
-            .with_context(|| format!("Request failed for URL: {}", url))?;
-
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "Server returned error status: {}",
-                response.status()
-            ));
-        }
-
-        let max_bytes = policy.resources.max_bytes;
-
-        // Avoids printing the error more than once
-        let mut already_too_long = false;
-
-        // Fast-fail for `Content-Length` header
-        if let Some(length) = response
-            .headers()
-            .get(header::CONTENT_LENGTH)
-            .and_then(|x| x.to_str().ok())
-            .and_then(|x| x.parse::<usize>().ok())
-            && length > max_bytes.value
-        {
-            max_bytes.handle(logger, ContentTooLong(max_bytes.value))?;
-            already_too_long = true;
-        }
-
-        let content_type = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string());
-
-        // Stream body with byte limit to prevent memory exhaustion
-        let mut stream = response.bytes_stream();
-        let mut length = 0;
-
-        let mut rewriter = create_rewriter(logger, policy, None, output);
-
-        while let Some(item) = stream.next().await {
-            let chunk = item.context("Error while streaming body")?;
-
-            length += chunk.len();
-            if !already_too_long && length > max_bytes.value {
-                max_bytes.handle(logger, ContentTooLong(max_bytes.value))?;
-                already_too_long = true;
-            }
-
-            rewriter.write(&chunk)?;
-        }
-
-        rewriter.end()?;
-
-        Ok(FetchedContent {
-            source: InputSource::Url(url.clone()),
-            data: Vec::new(),
-            content_type,
-        })
-    }
-
     /// Fetch raw bytes of a URL with security controls, enforcing max_bytes limit on the current request.
     ///
     /// # Inputs
@@ -387,15 +302,21 @@ impl SanitizerHttpClient {
     }
 
     /// Fetch a single HTML URL, sanitize/rewrite it, and collect discovered subresources.
+    ///
+    /// # Inputs
+    /// * `url` - The remote URL to fetch.
+    /// * `logger` - The logging interface.
+    /// * `output` - The file handle to stream the rewritten HTML bytes into.
+    /// * `policy` - The security policy configuration.
     pub async fn fetch_and_sanitize_html(
         &self,
         url: &Url,
         logger: &Logger,
         output_path: &Path,
         policy: &Policy,
-    ) -> Result<(Url, Vec<(Url, String)>)> {
+    ) -> Result<CrawlerState, LoggerError> {
         if url.scheme() != "https" {
-            return Err(anyhow!("Only HTTPS URLs are permitted"));
+            return Err(anyhow!("Only HTTPS URLs are permitted").into());
         }
 
         let response = self
@@ -406,15 +327,15 @@ impl SanitizerHttpClient {
             .with_context(|| format!("Request failed for URL: {}", url))?;
 
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "Server returned error status: {}",
-                response.status()
-            ));
+            return Err(anyhow!("Server returned error status: {}", response.status()).into());
         }
 
         let max_bytes = policy.resources.max_bytes;
 
-        // Content-Length check for HTML
+        // Avoids logging the error more than once
+        let mut already_too_long = false;
+
+        // Fast-fail for `Content-Length` header
         if let Some(length) = response
             .headers()
             .get(header::CONTENT_LENGTH)
@@ -423,6 +344,7 @@ impl SanitizerHttpClient {
             && length > max_bytes.value
         {
             max_bytes.handle(logger, ContentTooLong(max_bytes.value))?;
+            already_too_long = true;
         }
 
         let content_type = response
@@ -437,82 +359,44 @@ impl SanitizerHttpClient {
             .unwrap_or(true);
 
         if !is_html {
-            return Err(anyhow!("Root URL did not return HTML content type"));
+            return Err(anyhow!("Root URL did not return HTML content type").into());
         }
 
         let mut stream = response.bytes_stream();
         let mut total_bytes = 0;
 
-        let base_url = Arc::new(Mutex::new(url.clone()));
-        let sub_resources = Arc::new(Mutex::new(Vec::new()));
+        let mut crawler_state = CrawlerState {
+            base: url.clone(),
+            subresources: Vec::new(),
+        };
 
-        let file = File::create(output_path)?;
         let mut rewriter = create_rewriter(
             logger,
             policy,
-            Some((Arc::clone(&base_url), Arc::clone(&sub_resources))),
-            file,
+            &mut crawler_state,
+            File::create(output_path)?,
         );
 
         while let Some(item) = stream.next().await {
-            let chunk = item.context("Error while streaming HTML body")?;
-            total_bytes += chunk.len();
+            let chunk = item.context("Error while streaming body")?;
 
-            if total_bytes > max_bytes.value {
+            total_bytes += chunk.len();
+            if !already_too_long && total_bytes > max_bytes.value {
                 max_bytes.handle(logger, ContentTooLong(max_bytes.value))?;
+                already_too_long = true;
             }
 
-            rewriter.write(&chunk)?;
+            rewriter.write(&chunk).map_err(|e| match e {
+                // Extract the error returned inside the `element!()` macro
+                RewritingError::ContentHandlerError(e) => e,
+                e => e.into(),
+            })?;
         }
 
         rewriter.end()?;
 
-        let final_base = {
-            let guard = base_url.lock().unwrap();
-            guard.clone()
-        };
-        let discovered = {
-            let guard = sub_resources.lock().unwrap();
-            guard.clone()
-        };
-
-        Ok((final_base, discovered))
+        Ok(crawler_state)
     }
-}
-
-/*================== MAIN FUNCTIONS ===================*/
-
-/// Fetch multiple URLs and return their content (deprecated helper).
-///
-/// # Inputs
-/// * `sources` - Vector of InputSources to fetch.
-/// * `policy` - The security policy configuration.
-///
-/// # Returns
-/// * `Result<(Vec<FetchedContent>, Vec<anyhow::Error>)>` - A tuple containing fetched contents and encountered errors.
-#[allow(dead_code)]
-pub async fn fetch_multiple_urls(
-    sources: Vec<InputSource>,
-    policy: &Policy,
-) -> Result<(Vec<FetchedContent>, Vec<anyhow::Error>)> {
-    let mut results_vec = Vec::new();
-    let mut errors_vec = Vec::<anyhow::Error>::new();
-
-    // let client = SanitizerHttpClient::new(policy).await?;
-
-    // for input_source in sources {
-    //     if let InputSource::Url(url) = input_source {
-    //         match client.fetch_one_url(&url, policy).await {
-    //             Ok(res) => results_vec.push(res),
-    //             Err(e) => errors_vec.push(anyhow!(
-    //                 "Could not fetch url {}: {}",
-    //                 url,
-    //                 e.source().unwrap().source().unwrap()
-    //             )),
-    //         }
-    //     }
-    // }
-    Ok((results_vec, errors_vec))
 }
 
 /*================== TESTS ===================*/

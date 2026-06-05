@@ -2,10 +2,7 @@ use lol_html::{
     element,
     send::{HtmlRewriter, Settings},
 };
-use std::{
-    io::Write,
-    sync::{Arc, Mutex},
-};
+use std::io::Write;
 use url::Url;
 
 use crate::sanitizer_engine::{
@@ -54,8 +51,13 @@ fn handle_dangerous_link(
                 return policy.html.dangerous_domain.handle(
                     logger,
                     |x| -> Result<_, LoggerError> {
-                        resolved_url.set_host(Some(x))?;
-                        el.set_attribute(attr_name, resolved_url.as_ref())?;
+                        let new = match resolved_url.set_host(Some(x)) {
+                            // If policy value is a valid host, replace the host of the old url
+                            Ok(_) => resolved_url.as_ref(),
+                            // Otherwise replace the whole url with the policy value
+                            Err(_) => x,
+                        };
+                        el.set_attribute(attr_name, new)?;
                         Ok(())
                     },
                     DangerousDomainInHtml(host.to_owned(), location.bytes().start),
@@ -64,6 +66,13 @@ fn handle_dangerous_link(
         }
     }
     Ok(())
+}
+
+pub struct CrawlerState {
+    /// The base URL of the document
+    pub base: Url,
+    /// The resources discovered in the document
+    pub subresources: Vec<(Url, String)>,
 }
 
 /// Creates an `HtmlRewriter` to inspect and rewrite HTML contents.
@@ -75,7 +84,7 @@ fn handle_dangerous_link(
 /// # Inputs
 /// * `logger` - The logging interface.
 /// * `policy` - The security policy configuration.
-/// * `crawler_state` - Optional tuple containing the document's thread-safe base URL and discovered resources accumulator.
+/// * `state` - Optional tuple containing the document's thread-safe base URL and discovered resources accumulator.
 /// * `output` - The output stream writer to write the rewritten HTML bytes to.
 ///
 /// # Returns
@@ -83,28 +92,23 @@ fn handle_dangerous_link(
 pub fn create_rewriter<'a, W: Write>(
     logger: &'a Logger,
     policy: &'a Policy,
-    crawler_state: Option<(Arc<Mutex<Url>>, Arc<Mutex<Vec<(Url, String)>>>)>,
+    state: &'a mut CrawlerState,
     mut output: W,
 ) -> HtmlRewriter<'a, impl FnMut(&[u8])> {
-    let element_content_handlers = if policy.resources.fetch_sub_resources
-        && let Some((base_url, sub_resources)) = crawler_state
-    {
+    let element_content_handlers = if policy.resources.fetch_sub_resources {
         vec![element!(
             "base[href], a[href], link[href], script[src], img[src], image[href], source[src]",
             move |el| {
                 match el.tag_name().as_str() {
                     "base" => {
-                        if let Some(href) = el.get_attribute("href") {
-                            let mut current_base = base_url.lock().unwrap();
-                            if let Ok(new_base) = current_base.join(&href) {
-                                *current_base = new_base;
-                            }
+                        if let Some(href) = el.get_attribute("href")
+                            && let Ok(new_base) = state.base.join(&href)
+                        {
+                            state.base = new_base;
                         }
                         Ok(())
                     }
-                    "a" => {
-                        handle_dangerous_link(el, "href", &base_url.lock().unwrap(), policy, logger)
-                    }
+                    "a" => handle_dangerous_link(el, "href", &state.base, policy, logger),
                     tag_name => {
                         let tag_name = tag_name.to_lowercase();
                         let attr_name = if tag_name == "link" || tag_name == "image" {
@@ -119,7 +123,7 @@ pub fn create_rewriter<'a, W: Write>(
                                 return handle_dangerous_link(
                                     el,
                                     attr_name,
-                                    &base_url.lock().unwrap(),
+                                    &state.base,
                                     policy,
                                     logger,
                                 );
@@ -127,10 +131,7 @@ pub fn create_rewriter<'a, W: Write>(
                         }
 
                         if let Some(val) = el.get_attribute(attr_name) {
-                            let resolved = {
-                                let current_base = base_url.lock().unwrap();
-                                current_base.join(&val)
-                            };
+                            let resolved = state.base.join(&val);
                             if let Ok(resolved_url) = resolved
                                 && resolved_url.scheme() == "https"
                             {
@@ -163,10 +164,7 @@ pub fn create_rewriter<'a, W: Write>(
                                 let local_name = crate::sanitizer_engine::resource_sanitizer::generate_local_filename(&resolved_url, default_ext);
 
                                 el.set_attribute(attr_name, &local_name)?;
-                                sub_resources
-                                    .lock()
-                                    .unwrap()
-                                    .push((resolved_url, local_name));
+                                state.subresources.push((resolved_url, local_name));
                             }
                         }
                         Ok(())

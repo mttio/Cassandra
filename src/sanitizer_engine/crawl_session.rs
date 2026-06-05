@@ -2,6 +2,7 @@ use crate::cli_application::http_client::SanitizerHttpClient;
 use crate::sanitizer_engine::errors::ContentTooLong;
 use crate::sanitizer_engine::errors::DangerousDomain;
 use crate::sanitizer_engine::errors::IDN;
+use crate::sanitizer_engine::html::CrawlerState;
 use crate::sanitizer_engine::html::create_rewriter;
 use crate::sanitizer_engine::log::LogLevel;
 use crate::sanitizer_engine::log::Logger;
@@ -204,24 +205,23 @@ impl CrawlSession {
     /// Worker task processing a local HTML file. Parses HTML, rewrites links, and enqueues referenced sub-resources.
     pub fn process_file(self: Arc<Self>, path: PathBuf) {
         let output_path = self.output_dir.join(format!("{}.html", self.index()));
-        let sub_resources = Arc::new(Mutex::new(Vec::new()));
 
-        let file_result = || -> Result<()> {
+        let file_result = || -> Result<_> {
             let input_file = File::open(&path)
                 .with_context(|| format!("Failed to open local file {:?}", path))?;
             let mut reader = BufReader::new(input_file);
             let output_file = File::create(&output_path)
                 .with_context(|| format!("Failed to create output file {:?}", output_path))?;
 
-            let crawler_state = if self.policy.resources.fetch_sub_resources {
-                let dummy_base = Arc::new(Mutex::new(Url::parse("https://localhost/").unwrap()));
-                Some((dummy_base, Arc::clone(&sub_resources)))
-            } else {
-                None
+            let mut crawler_state = {
+                CrawlerState {
+                    base: Url::parse("https://localhost").unwrap(),
+                    subresources: Vec::new(),
+                }
             };
 
             let mut rewriter =
-                create_rewriter(&self.logger, &self.policy, crawler_state, output_file);
+                create_rewriter(&self.logger, &self.policy, &mut crawler_state, output_file);
             let mut buffer = [0; 8192];
             loop {
                 let n = reader
@@ -237,21 +237,17 @@ impl CrawlSession {
             rewriter
                 .end()
                 .map_err(|e| anyhow!("Rewriter end error: {:?}", e))?;
-            Ok(())
+
+            Ok(crawler_state.subresources)
         }();
 
-        if let Err(error) = file_result {
-            self.logger.log(LogLevel::Error, error);
-            return;
-        }
-
-        let discovered = {
-            let guard = sub_resources.lock().unwrap();
-            guard.clone()
-        };
-
-        for (sub_url, local_name) in discovered {
-            self.try_enqueue_subresource(sub_url, local_name, 1);
+        match file_result {
+            Err(error) => self.logger.log(LogLevel::Error, error),
+            Ok(sub_resources) => {
+                for (sub_url, local_name) in sub_resources {
+                    self.try_enqueue_subresource(sub_url, local_name, 1);
+                }
+            }
         }
     }
 
@@ -288,7 +284,10 @@ impl CrawlSession {
             .fetch_and_sanitize_html(&url, &self.logger, &output_path, &self.policy)
             .await;
 
-        let (final_base, discovered) = match fetch_result {
+        let CrawlerState {
+            base: final_base,
+            subresources: discovered,
+        } = match fetch_result {
             Ok(res) => res,
             Err(error) => {
                 self.logger

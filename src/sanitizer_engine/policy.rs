@@ -71,7 +71,7 @@ impl Default for HtmlPolicy {
                 .map(PolicyHost)
                 .collect(),
             event_handlers: RuleWithReplace::new("".to_owned(), LogLevel::Info),
-            dangerous_domain: RuleWithReplace::new("#".to_owned(), LogLevel::Warn),
+            dangerous_domain: RuleWithReplace::new("#".to_owned(), LogLevel::Error),
         }
     }
 }

@@ -10,6 +10,7 @@ use crate::sanitizer_engine::log::{Logger, logging_thread};
 use crate::sanitizer_engine::policy::Policy;
 use anyhow::{Context, Result};
 use clap::Parser;
+use futures_util::future::lazy;
 use std::fs::{self};
 
 use std::path::PathBuf;
@@ -174,13 +175,9 @@ pub fn run() -> Result<()> {
         ));
 
         match source {
-            InputSource::Url(url) => {
-                runtime.spawn(async { session.process_url(url).await });
-            }
-            InputSource::File(path) => {
-                runtime.spawn_blocking(move || session.process_file(path));
-            }
-        }
+            InputSource::Url(url) => runtime.spawn(async { session.process_url(url).await }),
+            InputSource::File(path) => runtime.spawn(lazy(move |_| session.process_file(path))),
+        };
     }
 
     // Drop excess resources

@@ -1,5 +1,5 @@
 [logging]
-console = "error"
+console = "info"
 files = "trace"
 
 [html]
@@ -18,7 +18,7 @@ dangerous_domains = [
   "iana.org",
   "developers.google.com",
   "com.google.android.youtube",
-  "www.youtube.com",
+  # "www.youtube.com",
 ]
 idn = "warn"
 
