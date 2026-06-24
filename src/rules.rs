@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::sanitizer_engine::{
+use crate::{
     errors::LoggerError,
     log::{LogLevel, LoggerTrait},
 };

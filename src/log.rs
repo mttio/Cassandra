@@ -8,8 +8,8 @@ use colored::Colorize;
 use itertools::Itertools;
 use serde::Deserialize;
 
-use crate::sanitizer_engine::errors::LoggerError;
-use crate::sanitizer_engine::policy::Policy;
+use crate::errors::LoggerError;
+use crate::policy::Policy;
 
 pub trait LoggerTrait {
     fn log<E: Into<LoggerError>>(&self, level: LogLevel, error: E);

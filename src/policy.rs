@@ -3,7 +3,7 @@ use std::{fmt::Debug, time::Duration};
 use serde::Deserialize;
 use url::Host;
 
-use crate::sanitizer_engine::{
+use crate::{
     log::LogLevel,
     rules::{RuleWithReplace, RuleWithValue},
 };
