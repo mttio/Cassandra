@@ -38,12 +38,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "==========================================================".bright_blue());
 
     //run cli application
-    if let Err(e) = run(args) {
-        eprintln!("{} {:?}", "Application error:".red().bold(), e);
+    match run(args) {
+        Ok(true) => {
+            println!("{}", "======================== GOODBYE =========================".bright_black().bold());
+            std::process::exit(0);
+        }
+        Ok(false) => {
+            println!("{}", "======================== GOODBYE =========================".bright_black().bold());
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("{} {:?}", "Application error:".red().bold(), e);
+            println!("{}", "======================== GOODBYE =========================".bright_black().bold());
+            std::process::exit(1);
+        }
     }
-
-    println!("{}", "======================== GOODBYE =========================".bright_black().bold());
-    Ok(())
 }
 
 #[derive(Parser, Debug)]
@@ -141,8 +150,8 @@ fn parse_inputs(inputs: Vec<String>) -> Result<Vec<InputSource>> {
 /// * None (inputs are gathered from command line arguments via `Args::parse()`).
 ///
 /// # Returns
-/// * `Result<()>` - `Ok(())` on successful completion, or an error if initialization fails.
-pub fn run(args: Args) -> Result<()> {
+/// * `Result<bool>` - `Ok(true)` if clean/no blocklist errors, `Ok(false)` if blocked/denied content occurred, or an error if initialization fails.
+pub fn run(args: Args) -> Result<bool> {
     let policy = load_policy(args.policy.as_ref())?;
     
     // Print argument summary
@@ -160,7 +169,7 @@ pub fn run(args: Args) -> Result<()> {
 
     if sources.is_empty() {
         println!("{}", "[!] No valid inputs provided.".yellow());
-        return Ok(());
+        return Ok(true);
     }
 
     // Step 1: Clean output directory
@@ -198,16 +207,20 @@ pub fn run(args: Args) -> Result<()> {
 
     match library_result {
         Ok(_) => {
-            logging_thread(&output_dir, &policy, max_size, rx);
-            println!("\n{}", "[+] Execution complete! Checked files have been processed.".bright_blue().bold());
+            let has_errors = logging_thread(&output_dir, &policy, max_size, rx);
+            if has_errors {
+                println!("\n{}", "[-] Execution complete with policy blocks/errors. Checked files have been processed.".red().bold());
+                Ok(false)
+            } else {
+                println!("\n{}", "[+] Execution complete! Checked files have been processed.".bright_blue().bold());
+                Ok(true)
+            }
         }
         Err(e) => {
             println!("\n{}", "[-] Sanitization failed with error:".red().bold());
-            return Err(e);
+            Err(e)
         }
     }
-
-    Ok(())
 }
 
 /*======================== TESTS ============================*/

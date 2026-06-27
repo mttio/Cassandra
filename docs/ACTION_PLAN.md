@@ -53,7 +53,7 @@
   - Complete integration of IDN checks and Unicode normalization controls inside the HTML rewriter.
 
 ### 6. CLI & Application Integration (`cli_application`)
-- [ ] **Non-Zero Exit Codes**:
+- [x] **Non-Zero Exit Codes**:
   - Modify the CLI so it returns a non-zero exit code if the sanitizer blocklist rules result in blocking/denying content outright.
 - [x] **Code Cleanup**:
   - Resolve compiler warnings regarding unused variables and functions in `http_client.rs` and `cli.rs`.
