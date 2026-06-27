@@ -116,6 +116,7 @@ impl CrawlSession {
             || url.path().ends_with(".jpeg");
         let is_png = sniffed == "image/png" || url.path().ends_with(".png");
         let is_css = sniffed == "text/css" || url.path().ends_with(".css");
+        let is_pdf = sniffed == "application/pdf" || url.path().ends_with(".pdf");
         let is_js = sniffed == "text/javascript"
             || sniffed == "application/javascript"
             || url.path().ends_with(".js");
@@ -141,6 +142,17 @@ impl CrawlSession {
                     self.logger
                         .warn(anyhow!("JS validation failed for {}: {}", url, js_err));
                     b"/* Blocked by Web Sanitizer: dangerous keywords found */".to_vec()
+                }
+            }
+        } else if is_pdf {
+            match crate::resources::scan_pdf_for_active_content(&fetched.data) {
+                Ok(_) => fetched.data.clone(),
+                Err(err) => {
+                    self.policy
+                        .resources
+                        .pdf_active_content
+                        .handle(&self.logger, err)?;
+                    fetched.data.clone()
                 }
             }
         } else {
@@ -202,8 +214,83 @@ impl CrawlSession {
         });
     }
 
-    /// Worker task processing a local HTML file. Parses HTML, rewrites links, and enqueues referenced sub-resources.
+    /// Worker task processing a local file (HTML, PDF, etc.). Parses HTML, rewrites links, scans PDFs, and enqueues referenced sub-resources.
     pub fn process_file(self: Arc<Self>, path: PathBuf) {
+        let extension = path
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+
+        if extension == "pdf" {
+            let output_path = self.output_dir.join(format!("{}.pdf", self.index()));
+            let result = || -> Result<()> {
+                let data = fs::read(&path)
+                    .with_context(|| format!("Failed to read local PDF file {:?}", path))?;
+                
+                match crate::resources::scan_pdf_for_active_content(&data) {
+                    Ok(_) => {
+                        fs::write(&output_path, &data)
+                            .with_context(|| format!("Failed to write local PDF to {:?}", output_path))?;
+                    }
+                    Err(err) => {
+                        self.policy
+                            .resources
+                            .pdf_active_content
+                            .handle(&self.logger, err)?;
+                        fs::write(&output_path, &data)
+                            .with_context(|| format!("Failed to write local PDF to {:?}", output_path))?;
+                    }
+                }
+                Ok(())
+            }();
+
+            if let Err(error) = result {
+                self.logger.log(LogLevel::Error, error);
+            }
+            return;
+        } else if extension == "css" {
+            let output_path = self.output_dir.join(format!("{}.css", self.index()));
+            let result = || -> Result<()> {
+                let data = fs::read(&path)
+                    .with_context(|| format!("Failed to read local CSS file {:?}", path))?;
+                let css_str = String::from_utf8_lossy(&data);
+                let dummy_url = Url::parse("https://localhost").unwrap();
+                let (sanitized_css, _) = crate::resources::sanitize_css(&css_str, &dummy_url);
+                fs::write(&output_path, sanitized_css.as_bytes())
+                    .with_context(|| format!("Failed to write local CSS to {:?}", output_path))?;
+                Ok(())
+            }();
+
+            if let Err(error) = result {
+                self.logger.log(LogLevel::Error, error);
+            }
+            return;
+        } else if extension == "js" {
+            let output_path = self.output_dir.join(format!("{}.js", self.index()));
+            let result = || -> Result<()> {
+                let data = fs::read(&path)
+                    .with_context(|| format!("Failed to read local JS file {:?}", path))?;
+                let js_str = String::from_utf8_lossy(&data);
+                match crate::resources::sanitize_javascript(&js_str) {
+                    Ok(clean_js) => {
+                        fs::write(&output_path, clean_js.as_bytes())
+                            .with_context(|| format!("Failed to write local JS to {:?}", output_path))?;
+                    }
+                    Err(err) => {
+                        self.logger.warn(anyhow!("JS validation failed for direct input {:?}: {}", path, err));
+                        fs::write(&output_path, b"/* Blocked by Web Sanitizer: dangerous keywords found */")
+                            .with_context(|| format!("Failed to write local JS to {:?}", output_path))?;
+                    }
+                }
+                Ok(())
+            }();
+
+            if let Err(error) = result {
+                self.logger.log(LogLevel::Error, error);
+            }
+            return;
+        }
+
         let output_path = self.output_dir.join(format!("{}.html", self.index()));
 
         let file_result = || -> Result<_> {
@@ -223,12 +310,18 @@ impl CrawlSession {
             let mut rewriter =
                 create_rewriter(&self.logger, &self.policy, &mut crawler_state, output_file);
             let mut buffer = [0; 8192];
+            let mut entity_scanner = crate::resources::EntityScanner::new();
             loop {
                 let n = reader
                     .read(&mut buffer)
                     .with_context(|| format!("Failed to read chunk from file {:?}", path))?;
                 if n == 0 {
                     break;
+                }
+                if entity_scanner.feed_chunk(&buffer[..n]) {
+                    drop(rewriter);
+                    let _ = std::fs::remove_file(&output_path);
+                    return Err(SanitizerError::XmlEntityDeclaration.into());
                 }
                 rewriter.write(&buffer[..n])?;
             }

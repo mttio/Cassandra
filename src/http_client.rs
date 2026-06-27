@@ -279,15 +279,33 @@ impl SanitizerHttpClient {
             .and_then(|h| h.to_str().ok())
             .map(|s| s.to_string());
 
+        let is_xml_html_svg = if let Some(ref ct) = content_type {
+            let clean = crate::resources::mime::clean(ct);
+            clean.contains("html") || clean.contains("xml") || clean.contains("svg")
+        } else {
+            false
+        } || {
+            let path = url.path().to_lowercase();
+            path.ends_with(".html")
+                || path.ends_with(".htm")
+                || path.ends_with(".xml")
+                || path.ends_with(".svg")
+                || path.ends_with(".xhtml")
+        };
+
         let mut stream = response.bytes_stream();
         let mut data = Vec::new();
         let mut length = 0;
+        let mut entity_scanner = crate::resources::EntityScanner::new();
 
         while let Some(item) = stream.next().await {
             let chunk = item.context("Error while streaming body")?;
             length += chunk.len();
             if length > remaining_bytes {
                 return Err(SanitizerError::ContentTooLong(remaining_bytes));
+            }
+            if is_xml_html_svg && entity_scanner.feed_chunk(&chunk) {
+                return Err(SanitizerError::XmlEntityDeclaration);
             }
             data.extend_from_slice(&chunk);
         }
@@ -330,9 +348,6 @@ impl SanitizerHttpClient {
 
         let max_bytes = policy.resources.max_bytes;
 
-        // Avoids logging the error more than once
-        let mut already_too_long = false;
-
         // Fast-fail for `Content-Length` header
         if let Some(length) = response
             .headers()
@@ -341,8 +356,8 @@ impl SanitizerHttpClient {
             .and_then(|x| x.parse::<usize>().ok())
             && length > max_bytes.value
         {
-            max_bytes.handle(logger, SanitizerError::ContentTooLong(max_bytes.value))?;
-            already_too_long = true;
+            let _ = max_bytes.handle(logger, SanitizerError::ContentTooLong(max_bytes.value));
+            return Err(SanitizerError::ContentTooLong(max_bytes.value));
         }
 
         let content_type = response
@@ -375,13 +390,22 @@ impl SanitizerHttpClient {
             File::create(output_path).map_err(|e| anyhow!("{e}"))?,
         );
 
+        let mut entity_scanner = crate::resources::EntityScanner::new();
         while let Some(item) = stream.next().await {
             let chunk = item.context("Error while streaming body")?;
 
             total_bytes += chunk.len();
-            if !already_too_long && total_bytes > max_bytes.value {
-                max_bytes.handle(logger, SanitizerError::ContentTooLong(max_bytes.value))?;
-                already_too_long = true;
+            if total_bytes > max_bytes.value {
+                drop(rewriter);
+                let _ = std::fs::remove_file(output_path);
+                let _ = max_bytes.handle(logger, SanitizerError::ContentTooLong(max_bytes.value));
+                return Err(SanitizerError::ContentTooLong(max_bytes.value));
+            }
+
+            if entity_scanner.feed_chunk(&chunk) {
+                drop(rewriter);
+                let _ = std::fs::remove_file(output_path);
+                return Err(SanitizerError::XmlEntityDeclaration);
             }
 
             rewriter.write(&chunk)?;
@@ -453,5 +477,22 @@ mod tests {
         assert!(is_v4_reserved(Ipv4Addr::new(255, 255, 255, 255))); // Broadcast
         assert!(!is_v4_reserved(Ipv4Addr::new(8, 8, 8, 8))); // public
         assert!(!is_v4_reserved(Ipv4Addr::new(1, 1, 1, 1))); // public
+    }
+
+    #[tokio::test]
+    async fn test_ssrf_safe_dns_resolver_local() {
+        use std::str::FromStr;
+        let inner = TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let resolver = SsrfSafeDnsResolver {
+            inner: Arc::new(inner),
+            timeout: Duration::from_secs(2),
+        };
+        
+        let name = Name::from_str("localhost").unwrap();
+        let res = resolver.resolve(name).await;
+        if let Ok(addrs) = res {
+            let list: Vec<std::net::SocketAddr> = addrs.collect();
+            assert!(list.is_empty(), "localhost resolved to IPs but all should be filtered out: {:?}", list);
+        }
     }
 }
