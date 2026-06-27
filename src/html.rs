@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::{
     errors::{LoggerError, SanitizerError},
-    log::Logger,
+    log::{Logger, LoggerTrait},
     policy::Policy,
     url::RuleMatch,
 };
@@ -31,11 +31,25 @@ fn handle_dangerous_link(
     logger: &Logger,
 ) -> Result<(), LoggerError> {
     if let Some(val) = el.get_attribute(attr_name) {
-        let resolved = base_url.join(&val);
+        use unicode_normalization::UnicodeNormalization;
+        let val_normalized = val.nfc().collect::<String>();
+
+        let resolved = base_url.join(&val_normalized);
         if let Ok(mut resolved_url) = resolved
             && let Some(host) = resolved_url.host()
         {
             let host = host.to_owned();
+
+            // Check IDN
+            if let Some(original) = crate::url::check_domain(&resolved_url) {
+                let err = SanitizerError::Idn(original);
+                if let Err(e) = policy.urls.idn.handle(logger, err) {
+                    logger.error(e);
+                    el.set_attribute(attr_name, "#")?;
+                    return Ok(());
+                }
+            }
+
             let is_dangerous = policy
                 .urls
                 .dangerous_domains
@@ -128,12 +142,26 @@ pub fn create_rewriter<'a, W: Write>(
                         }
 
                         if let Some(val) = el.get_attribute(attr_name) {
-                            let resolved = state.base.join(&val);
+                            use unicode_normalization::UnicodeNormalization;
+                            let val_normalized = val.nfc().collect::<String>();
+
+                            let resolved = state.base.join(&val_normalized);
                             if let Ok(resolved_url) = resolved
                                 && resolved_url.scheme() == "https"
                             {
                                 if let Some(host) = resolved_url.host() {
                                     let host_owned = host.to_owned();
+
+                                    // Check IDN
+                                    if let Some(original) = crate::url::check_domain(&resolved_url) {
+                                        let err = SanitizerError::Idn(original);
+                                        if let Err(e) = policy.urls.idn.handle(logger, err) {
+                                            logger.error(e);
+                                            el.set_attribute(attr_name, "")?;
+                                            return Ok(());
+                                        }
+                                    }
+
                                     let is_dangerous = policy
                                         .urls
                                         .dangerous_domains
@@ -175,10 +203,24 @@ pub fn create_rewriter<'a, W: Write>(
     } else {
         vec![element!("a[href], link[href]", move |el| {
             let href = el.get_attribute("href").expect("href was required");
-            if let Ok(href) = Url::parse(&href)
-                && let Some(host) = href.host()
+            use unicode_normalization::UnicodeNormalization;
+            let href_normalized = href.nfc().collect::<String>();
+
+            if let Ok(href_url) = Url::parse(&href_normalized)
+                && let Some(host) = href_url.host()
             {
                 let host = host.to_owned();
+
+                // Check IDN
+                if let Some(original) = crate::url::check_domain(&href_url) {
+                    let err = SanitizerError::Idn(original);
+                    if let Err(e) = policy.urls.idn.handle(logger, err) {
+                        logger.error(e);
+                        el.set_attribute("href", "#")?;
+                        return Ok(());
+                    }
+                }
+
                 let is_dangerous = policy
                     .urls
                     .dangerous_domains
@@ -212,4 +254,49 @@ pub fn create_rewriter<'a, W: Write>(
             output.write_all(c).unwrap();
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn test_idn_rewriting() {
+        let (tx, _rx) = channel();
+        let logger = Logger {
+            index: 0,
+            channel: tx,
+        };
+
+        // Case 1: IDN is Warn (default). It should preserve the link.
+        let mut policy = Policy::default();
+        policy.urls.idn = crate::log::LogLevel::Warn;
+        policy.resources.fetch_sub_resources = false;
+
+        let mut crawler_state = CrawlerState {
+            base: Url::parse("https://localhost").unwrap(),
+            subresources: vec![],
+        };
+
+        let mut output = Vec::new();
+        {
+            let mut rewriter = create_rewriter(&logger, &policy, &mut crawler_state, &mut output);
+            rewriter.write(b"<a href=\"http://googl\xC3\xA9.com\">Link</a>").unwrap();
+            rewriter.end().unwrap();
+        }
+        let out_str = String::from_utf8(output).unwrap();
+        assert!(out_str.contains("http://googl\u{00E9}.com") || out_str.contains("http://xn--googl-fsa.com"));
+
+        // Case 2: IDN is Error (Block). It should rewrite to "#".
+        policy.urls.idn = crate::log::LogLevel::Error;
+        let mut output2 = Vec::new();
+        {
+            let mut rewriter = create_rewriter(&logger, &policy, &mut crawler_state, &mut output2);
+            rewriter.write(b"<a href=\"http://googl\xC3\xA9.com\">Link</a>").unwrap();
+            rewriter.end().unwrap();
+        }
+        let out_str2 = String::from_utf8(output2).unwrap();
+        assert!(out_str2.contains("href=\"#\""));
+    }
 }
