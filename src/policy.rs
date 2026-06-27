@@ -59,17 +59,67 @@ pub struct Policy {
     pub connections: ConnectionsPolicy,
 }
 
+// Newtype to remove invalid characters in HTML attributes
+#[derive(Debug, Default)]
+pub struct AttributeString(String);
+
+impl AttributeString {
+    pub fn new(s: &str) -> Self {
+        Self(s.replace([' ', '\n', '\r', '\t', '\x0C', '/', '>', '='], ""))
+    }
+
+    pub fn inner(&self) -> Option<&str> {
+        if self.0.is_empty() {
+            None
+        } else {
+            Some(&self.0)
+        }
+    }
+
+    pub fn replace_attribute(
+        &self,
+        name: &str,
+        element: &mut lol_html::html_content::Element<impl lol_html::HandlerTypes>,
+    ) {
+        match self.inner() {
+            None => element.remove_attribute(name),
+            Some(x) => {
+                // SAFETY: we removed all invalid characters
+                let _ = element.set_attribute(name, x);
+            }
+        }
+    }
+}
+
+impl Serialize for AttributeString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for AttributeString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(|x| Self::new(&x))
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HtmlPolicy {
     pub allow_scripts: Vec<String>,
     pub allow_origins: Vec<PolicyHost>,
     /// Action to perform when an event handler is encountered
-    pub event_handlers: RuleWithReplace<String>,
+    pub event_handlers: RuleWithReplace<AttributeString>,
     /// Action to perform when a dangerous domain is encountered
     pub dangerous_domain: RuleWithReplace<String>,
     /// Action to perform when a dangerous URI (javascript:, data:) is encountered
-    pub dangerous_uris: RuleWithReplace<String>,
+    pub dangerous_uris: RuleWithReplace<AttributeString>,
 }
 
 impl Default for HtmlPolicy {
@@ -81,9 +131,9 @@ impl Default for HtmlPolicy {
                 .flat_map(Host::parse)
                 .map(PolicyHost)
                 .collect(),
-            event_handlers: RuleWithReplace::new("".to_owned(), LogLevel::Info),
+            event_handlers: RuleWithReplace::new(AttributeString::new(""), LogLevel::Info),
             dangerous_domain: RuleWithReplace::new("#".to_owned(), LogLevel::Error),
-            dangerous_uris: RuleWithReplace::new("#".to_owned(), LogLevel::Info),
+            dangerous_uris: RuleWithReplace::new(AttributeString::new("#"), LogLevel::Info),
         }
     }
 }
@@ -121,6 +171,7 @@ pub struct ResourcesPolicy {
     pub mismatched_mime: LogLevel,
     pub unknown_resource: LogLevel,
     pub pdf_active_content: LogLevel,
+    pub dangerous_js: LogLevel,
 }
 
 impl Default for ResourcesPolicy {
@@ -133,6 +184,7 @@ impl Default for ResourcesPolicy {
             mismatched_mime: LogLevel::Error,
             unknown_resource: LogLevel::Error,
             pdf_active_content: LogLevel::Error,
+            dangerous_js: LogLevel::Error,
         }
     }
 }

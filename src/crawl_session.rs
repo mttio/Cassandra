@@ -3,18 +3,15 @@ use crate::errors::SanitizerMessage;
 use crate::html::CrawlerState;
 use crate::html::create_rewriter;
 use crate::http_client::SanitizerHttpClient;
-use crate::log::LogLevel;
 use crate::log::Logger;
 use crate::log::LoggerTrait;
 use crate::policy::Policy;
 use crate::resources::mime;
 use crate::resources::sanitize_css;
-use crate::resources::sanitize_javascript;
 use crate::resources::strip_jpeg_metadata;
 use crate::resources::strip_png_metadata;
 use crate::url::RuleMatch;
 use crate::url::check_domain;
-use anyhow::{Context, Result, anyhow};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs;
@@ -89,7 +86,7 @@ impl CrawlSession {
             .client
             .fetch_raw(&url, &self.logger, &self.policy, remaining_bytes)
             .await
-            .map_err(|e| SanitizerError::SubresourceFetch(url.clone(), Box::new(e)))?;
+            .map_err(|e| SanitizerError::UrlFetch(url.clone(), Box::new(e), false))?;
 
         {
             let mut total_bytes = self.total_bytes.lock();
@@ -136,14 +133,17 @@ impl CrawlSession {
             sanitized_css.into_bytes()
         } else if is_js {
             let js_str = String::from_utf8_lossy(&fetched.data);
-            match sanitize_javascript(&js_str) {
-                Ok(clean_js) => clean_js.into_bytes(),
-                Err(js_err) => {
-                    self.logger
-                        .warn(anyhow!("JS validation failed for {}: {}", url, js_err));
-                    b"/* Blocked by Web Sanitizer: dangerous keywords found */".to_vec()
-                }
-            }
+            crate::resources::sanitize_javascript(&js_str)
+                .map(|x| x.into_bytes())
+                .or_else(|e| {
+                    self.policy
+                        .resources
+                        .dangerous_js
+                        .handle(&self.logger, e)
+                        .map(|_| {
+                            b"/* Blocked by Web Sanitizer: dangerous keywords found */".to_vec()
+                        })
+                })?
         } else if is_pdf {
             match crate::resources::scan_pdf_for_active_content(&fetched.data) {
                 Ok(_) => fetched.data.clone(),
@@ -164,8 +164,7 @@ impl CrawlSession {
         };
 
         let sub_path = self.output_dir.join(&local_name);
-        fs::write(&sub_path, &sanitized_data)
-            .map_err(|e| anyhow!("Failed to write sub-resource to {:?}: {}", sub_path, e).into())
+        fs::write(&sub_path, &sanitized_data).map_err(|e| SanitizerError::WriteFile(sub_path, e))
     }
 
     /// Checks limits and registers a sub-resource URL, then enqueues it if valid and not visited.
@@ -221,123 +220,104 @@ impl CrawlSession {
             .map(|ext| ext.to_string_lossy().to_lowercase())
             .unwrap_or_default();
 
-        if extension == "pdf" {
-            let output_path = self.output_dir.join(format!("{}.pdf", self.index()));
-            let result = || -> Result<()> {
-                let data = fs::read(&path)
-                    .with_context(|| format!("Failed to read local PDF file {:?}", path))?;
-                
-                match crate::resources::scan_pdf_for_active_content(&data) {
-                    Ok(_) => {
-                        fs::write(&output_path, &data)
-                            .with_context(|| format!("Failed to write local PDF to {:?}", output_path))?;
-                    }
-                    Err(err) => {
-                        self.policy
-                            .resources
-                            .pdf_active_content
-                            .handle(&self.logger, err)?;
-                        fs::write(&output_path, &data)
-                            .with_context(|| format!("Failed to write local PDF to {:?}", output_path))?;
-                    }
-                }
-                Ok(())
-            }();
+        let result = match extension.as_str() {
+            "pdf" => self.process_pdf_file(path),
+            "css" => self.process_css_file(path),
+            "js" => self.process_js_file(path),
+            _ => self.process_html_file(path),
+        };
 
-            if let Err(error) = result {
-                self.logger.log(LogLevel::Error, error);
-            }
-            return;
-        } else if extension == "css" {
-            let output_path = self.output_dir.join(format!("{}.css", self.index()));
-            let result = || -> Result<()> {
-                let data = fs::read(&path)
-                    .with_context(|| format!("Failed to read local CSS file {:?}", path))?;
-                let css_str = String::from_utf8_lossy(&data);
-                let dummy_url = Url::parse("https://localhost").unwrap();
-                let (sanitized_css, _) = crate::resources::sanitize_css(&css_str, &dummy_url);
-                fs::write(&output_path, sanitized_css.as_bytes())
-                    .with_context(|| format!("Failed to write local CSS to {:?}", output_path))?;
-                Ok(())
-            }();
+        if let Err(e) = result {
+            self.logger.error(e);
+        }
+    }
 
-            if let Err(error) = result {
-                self.logger.log(LogLevel::Error, error);
-            }
-            return;
-        } else if extension == "js" {
-            let output_path = self.output_dir.join(format!("{}.js", self.index()));
-            let result = || -> Result<()> {
-                let data = fs::read(&path)
-                    .with_context(|| format!("Failed to read local JS file {:?}", path))?;
-                let js_str = String::from_utf8_lossy(&data);
-                match crate::resources::sanitize_javascript(&js_str) {
-                    Ok(clean_js) => {
-                        fs::write(&output_path, clean_js.as_bytes())
-                            .with_context(|| format!("Failed to write local JS to {:?}", output_path))?;
-                    }
-                    Err(err) => {
-                        self.logger.warn(anyhow!("JS validation failed for direct input {:?}: {}", path, err));
-                        fs::write(&output_path, b"/* Blocked by Web Sanitizer: dangerous keywords found */")
-                            .with_context(|| format!("Failed to write local JS to {:?}", output_path))?;
-                    }
-                }
-                Ok(())
-            }();
+    fn process_pdf_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
+        let output_path = self.output_dir.join(format!("{}.pdf", self.index()));
+        let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
 
-            if let Err(error) = result {
-                self.logger.log(LogLevel::Error, error);
-            }
-            return;
+        if let Err(e) = crate::resources::scan_pdf_for_active_content(&data) {
+            self.policy
+                .resources
+                .pdf_active_content
+                .handle(&self.logger, e)?;
         }
 
+        fs::write(&output_path, &data).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
+
+        Ok(())
+    }
+
+    fn process_css_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
+        let output_path = self.output_dir.join(format!("{}.css", self.index()));
+        let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
+        let css_str = String::from_utf8_lossy(&data);
+        let dummy_url = Url::parse("https://localhost").unwrap();
+        let (sanitized_css, _) = crate::resources::sanitize_css(&css_str, &dummy_url);
+        fs::write(&output_path, sanitized_css.as_bytes())
+            .map_err(|e| SanitizerError::WriteFile(output_path, e))?;
+        Ok(())
+    }
+
+    fn process_js_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
+        let output_path = self.output_dir.join(format!("{}.js", self.index()));
+        let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
+        let js_str = String::from_utf8_lossy(&data);
+
+        let to_write = crate::resources::sanitize_javascript(&js_str).or_else(|e| {
+            self.policy
+                .resources
+                .dangerous_js
+                .handle(&self.logger, e)
+                .map(|_| "/* Blocked by Web Sanitizer: dangerous keywords found */".to_owned())
+        })?;
+
+        fs::write(&output_path, to_write).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
+
+        Ok(())
+    }
+
+    fn process_html_file(self: &Arc<Self>, path: PathBuf) -> Result<(), SanitizerError> {
         let output_path = self.output_dir.join(format!("{}.html", self.index()));
 
-        let file_result = || -> Result<_> {
-            let input_file = File::open(&path)
-                .with_context(|| format!("Failed to open local file {:?}", path))?;
-            let mut reader = BufReader::new(input_file);
-            let output_file = File::create(&output_path)
-                .with_context(|| format!("Failed to create output file {:?}", output_path))?;
+        let input_file =
+            File::open(&path).map_err(|e| SanitizerError::OpenFile(path.clone(), e))?;
+        let mut reader = BufReader::new(input_file);
+        let output_file = File::create(&output_path)
+            .map_err(|e| SanitizerError::CreateFile(output_path.clone(), e))?;
 
-            let mut crawler_state = {
-                CrawlerState {
-                    base: Url::parse("https://localhost").unwrap(),
-                    subresources: Vec::new(),
-                }
-            };
-
-            let mut rewriter =
-                create_rewriter(&self.logger, &self.policy, &mut crawler_state, output_file);
-            let mut buffer = [0; 8192];
-            let mut entity_scanner = crate::resources::EntityScanner::new();
-            loop {
-                let n = reader
-                    .read(&mut buffer)
-                    .with_context(|| format!("Failed to read chunk from file {:?}", path))?;
-                if n == 0 {
-                    break;
-                }
-                if entity_scanner.feed_chunk(&buffer[..n]) {
-                    drop(rewriter);
-                    let _ = std::fs::remove_file(&output_path);
-                    return Err(SanitizerError::XmlEntityDeclaration.into());
-                }
-                rewriter.write(&buffer[..n])?;
+        let mut crawler_state = {
+            CrawlerState {
+                base: Url::parse("https://localhost").unwrap(),
+                subresources: Vec::new(),
             }
-            rewriter.end()?;
+        };
 
-            Ok(crawler_state.subresources)
-        }();
-
-        match file_result {
-            Err(error) => self.logger.log(LogLevel::Error, error),
-            Ok(sub_resources) => {
-                for (sub_url, local_name) in sub_resources {
-                    self.try_enqueue_subresource(sub_url, local_name, 1);
-                }
+        let mut rewriter =
+            create_rewriter(&self.logger, &self.policy, &mut crawler_state, output_file);
+        let mut buffer = [0; 8192];
+        let mut entity_scanner = crate::resources::EntityScanner::new();
+        loop {
+            let n = reader
+                .read(&mut buffer)
+                .map_err(|e| SanitizerError::ReadFile(path.clone(), e))?;
+            if n == 0 {
+                break;
             }
+            if entity_scanner.feed_chunk(&buffer[..n]) {
+                drop(rewriter);
+                let _ = std::fs::remove_file(&output_path);
+                return Err(SanitizerError::XmlEntityDeclaration);
+            }
+            rewriter.write(&buffer[..n])?;
         }
+        rewriter.end()?;
+
+        for (sub_url, local_name) in crawler_state.subresources {
+            self.try_enqueue_subresource(sub_url, local_name, 1);
+        }
+
+        Ok(())
     }
 
     /// Worker task fetching a remote HTML document, sanitizing it, and enqueuing referenced sub-resources.
@@ -383,7 +363,7 @@ impl CrawlSession {
             Ok(res) => res,
             Err(error) => {
                 self.logger
-                    .error(anyhow!("Could not fetch url {}: {}", url, error));
+                    .error(SanitizerError::UrlFetch(url, Box::new(error), false));
                 return;
             }
         };

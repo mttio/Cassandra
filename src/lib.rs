@@ -10,6 +10,7 @@ use tokio::runtime::Runtime;
 use crate::{
     crawl_session::CrawlSession,
     engine_structs::InputSource,
+    errors::SanitizerError,
     http_client::SanitizerHttpClient,
     log::{Logger, LoggerMessage},
     policy::Policy,
@@ -32,7 +33,7 @@ pub fn library(
     policy: Arc<Policy>,
     output_dir: Arc<PathBuf>,
     tx: Sender<LoggerMessage>,
-) -> anyhow::Result<()> {
+) -> Result<(), SanitizerError> {
     let url_map = Arc::new(Mutex::new(
         sources
             .iter()

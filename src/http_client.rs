@@ -1,12 +1,11 @@
 use crate::engine_structs::{FetchedContent, InputSource};
-use crate::errors::{LoggerError, SanitizerError};
+use crate::errors::SanitizerError;
 use crate::html::{CrawlerState, create_rewriter};
 use crate::log::{Logger, LoggerMessage};
 use crate::policy::Policy;
 use crate::url::{RuleMatch, check_domain};
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
 use hickory_resolver::TokioResolver;
 use parking_lot::Mutex;
@@ -159,11 +158,10 @@ impl SanitizerHttpClient {
         policy: Arc<Policy>,
         channel: Sender<LoggerMessage>,
         url_map: Arc<Mutex<HashMap<Url, usize>>>,
-    ) -> Result<Self> {
+    ) -> Result<Self, SanitizerError> {
         let resolver = TokioResolver::builder_tokio()
-            .context("Failed to create DNS resolver builder")?
-            .build()
-            .context("Failed to build DNS resolver")?;
+            .and_then(|x| x.build())
+            .map_err(|e| SanitizerError::CreateHttpClient(Box::new(e)))?;
 
         let ssrf_safe_resolver = SsrfSafeDnsResolver {
             inner: Arc::new(resolver),
@@ -187,7 +185,7 @@ impl SanitizerHttpClient {
 
                 let logger = (index, &channel);
 
-                let check = || -> Result<(), LoggerError> {
+                let check = || -> Result<(), SanitizerError> {
                     if let Some(original) = check_domain(attempt.url()) {
                         policy
                             .urls
@@ -225,7 +223,7 @@ impl SanitizerHttpClient {
             // Enforce TLS 1.2+
             .min_tls_version(reqwest::tls::Version::TLS_1_2)
             .build()
-            .context("Failed to build reqwest client")?;
+            .map_err(|e| SanitizerError::CreateHttpClient(Box::new(e)))?;
 
         Ok(Self { client })
     }
@@ -256,10 +254,10 @@ impl SanitizerHttpClient {
             .get(url.clone())
             .send()
             .await
-            .with_context(|| format!("Request failed for URL: {}", url))?;
+            .map_err(|e| SanitizerError::Request(url.clone(), e))?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Server returned error status: {}", response.status()).into());
+            return Err(SanitizerError::ServerStatus(response.status()));
         }
 
         // Fast-fail for `Content-Length` header
@@ -299,7 +297,7 @@ impl SanitizerHttpClient {
         let mut entity_scanner = crate::resources::EntityScanner::new();
 
         while let Some(item) = stream.next().await {
-            let chunk = item.context("Error while streaming body")?;
+            let chunk = item.map_err(SanitizerError::Streaming)?;
             length += chunk.len();
             if length > remaining_bytes {
                 return Err(SanitizerError::ContentTooLong(remaining_bytes));
@@ -340,10 +338,10 @@ impl SanitizerHttpClient {
             .get(url.clone())
             .send()
             .await
-            .with_context(|| format!("Request failed for URL: {}", url))?;
+            .map_err(|e| SanitizerError::Request(url.clone(), e))?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Server returned error status: {}", response.status()).into());
+            return Err(SanitizerError::ServerStatus(response.status()));
         }
 
         let max_bytes = policy.resources.max_bytes;
@@ -366,13 +364,13 @@ impl SanitizerHttpClient {
             .and_then(|h| h.to_str().ok())
             .map(|s| s.to_string());
 
-        let is_html = content_type
-            .as_ref()
-            .map(|ct| ct.contains("text/html"))
-            .unwrap_or(true);
-
-        if !is_html {
-            return Err(anyhow!("Root URL did not return HTML content type").into());
+        if let Some(content_type) = content_type
+            && !content_type.contains("text/html")
+        {
+            return Err(SanitizerError::MimeMismatch(
+                Some("text/html".to_owned()),
+                Some(content_type),
+            ));
         }
 
         let mut stream = response.bytes_stream();
@@ -387,12 +385,13 @@ impl SanitizerHttpClient {
             logger,
             policy,
             &mut crawler_state,
-            File::create(output_path).map_err(|e| anyhow!("{e}"))?,
+            File::create(output_path)
+                .map_err(|e| SanitizerError::CreateFile(output_path.to_owned(), e))?,
         );
 
         let mut entity_scanner = crate::resources::EntityScanner::new();
         while let Some(item) = stream.next().await {
-            let chunk = item.context("Error while streaming body")?;
+            let chunk = item.map_err(SanitizerError::Streaming)?;
 
             total_bytes += chunk.len();
             if total_bytes > max_bytes.value {
@@ -487,12 +486,16 @@ mod tests {
             inner: Arc::new(inner),
             timeout: Duration::from_secs(2),
         };
-        
+
         let name = Name::from_str("localhost").unwrap();
         let res = resolver.resolve(name).await;
         if let Ok(addrs) = res {
             let list: Vec<std::net::SocketAddr> = addrs.collect();
-            assert!(list.is_empty(), "localhost resolved to IPs but all should be filtered out: {:?}", list);
+            assert!(
+                list.is_empty(),
+                "localhost resolved to IPs but all should be filtered out: {:?}",
+                list
+            );
         }
     }
 }

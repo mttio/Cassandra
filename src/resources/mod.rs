@@ -2,18 +2,7 @@ pub mod mime;
 
 use crate::errors::SanitizerError;
 use itertools::Itertools;
-use std::error::Error;
-use std::fmt::Display;
 use url::Url;
-
-#[derive(Debug)]
-pub struct SanitizationError(pub String);
-impl Error for SanitizationError {}
-impl Display for SanitizationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 
 /// Helper to generate a unique local filename deterministic for a URL.
 ///
@@ -159,12 +148,12 @@ pub fn strip_png_metadata(data: &[u8]) -> Vec<u8> {
 ///
 /// # Returns
 /// * `Result<String, SanitizationError>` - `Ok(content)` if no dangerous keywords are found, otherwise an `Err(SanitizationError)` indicating what was found.
-pub fn sanitize_javascript(content: &str) -> Result<String, SanitizationError> {
+pub fn sanitize_javascript(content: &str) -> Result<String, SanitizerError> {
     let mut chars = content.chars().peekable();
     while let Some(c) = chars.next() {
         if c == 'e' {
             let mut temp = chars.clone();
-            if temp.next() == Some('v') && temp.next() == Some('a') && temp.next() == Some('l') {
+            if temp.next_array() == Some(['v', 'a', 'l']) {
                 while let Some(&next_c) = temp.peek() {
                     if next_c.is_whitespace() {
                         temp.next();
@@ -173,9 +162,7 @@ pub fn sanitize_javascript(content: &str) -> Result<String, SanitizationError> {
                     }
                 }
                 if temp.peek() == Some(&'(') {
-                    return Err(SanitizationError(
-                        "Dangerous construct 'eval(...)' detected in JS".into(),
-                    ));
+                    return Err(SanitizerError::DangerousJsConstruct("eval(...)".to_owned()));
                 }
             }
         }
@@ -186,8 +173,8 @@ pub fn sanitize_javascript(content: &str) -> Result<String, SanitizationError> {
                 if temp.next() == Some('.') {
                     let mut temp = temp.skip_while(|c| c.is_whitespace());
                     if temp.next_array() == Some(['w', 'r', 'i', 't', 'e']) {
-                        return Err(SanitizationError(
-                            "Dangerous construct 'document.write(...)' detected in JS".into(),
+                        return Err(SanitizerError::DangerousJsConstruct(
+                            "document.write(...)".to_owned(),
                         ));
                     }
                 }
@@ -321,7 +308,7 @@ pub fn scan_pdf_for_active_content(data: &[u8]) -> Result<(), SanitizerError> {
     let mut i = 0;
     while i < data.len() {
         // Check for stream block start
-        if i + 6 <= data.len() 
+        if i + 6 <= data.len()
             && &data[i..i + 6] == b"stream"
             && (i == 0 || data[i - 1].is_ascii_whitespace() || data[i - 1] == b'>')
         {
@@ -347,7 +334,9 @@ pub fn scan_pdf_for_active_content(data: &[u8]) -> Result<(), SanitizerError> {
             if i + 3 <= data.len() && &data[i..i + 3] == b"/JS" {
                 let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent("JavaScript (/JS)".to_string()));
+                    return Err(SanitizerError::ActiveContent(
+                        "JavaScript (/JS)".to_string(),
+                    ));
                 }
             }
             if i + 11 <= data.len() && &data[i..i + 11] == b"/JavaScript" {
@@ -359,7 +348,9 @@ pub fn scan_pdf_for_active_content(data: &[u8]) -> Result<(), SanitizerError> {
             if i + 3 <= data.len() && &data[i..i + 3] == b"/AA" {
                 let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent("Additional Action (/AA)".to_string()));
+                    return Err(SanitizerError::ActiveContent(
+                        "Additional Action (/AA)".to_string(),
+                    ));
                 }
             }
             if i + 11 <= data.len() && &data[i..i + 11] == b"/OpenAction" {
@@ -376,17 +367,17 @@ pub fn scan_pdf_for_active_content(data: &[u8]) -> Result<(), SanitizerError> {
 }
 
 fn is_pdf_delimiter(b: u8) -> bool {
-    b == 0 
-        || b.is_ascii_whitespace() 
-        || b == b'[' 
-        || b == b']' 
-        || b == b'<' 
-        || b == b'>' 
-        || b == b'(' 
-        || b == b')' 
-        || b == b'{' 
-        || b == b'}' 
-        || b == b'/' 
+    b == 0
+        || b.is_ascii_whitespace()
+        || b == b'['
+        || b == b']'
+        || b == b'<'
+        || b == b'>'
+        || b == b'('
+        || b == b')'
+        || b == b'{'
+        || b == b'}'
+        || b == b'/'
         || b == b'%'
 }
 
@@ -564,7 +555,8 @@ mod tests {
         assert!(scan_pdf_for_active_content(malicious_open).is_err());
 
         // PDF containing /JS inside a binary stream block (should pass)
-        let stream_pdf = b"%PDF-1.4\n1 0 obj\n<< /Length 20 >>\nstream\nrandom/JSdata\nendstream\nendobj\n";
+        let stream_pdf =
+            b"%PDF-1.4\n1 0 obj\n<< /Length 20 >>\nstream\nrandom/JSdata\nendstream\nendobj\n";
         assert!(scan_pdf_for_active_content(stream_pdf).is_ok());
 
         // Boundary checks and fake stream check
@@ -575,15 +567,19 @@ mod tests {
         let clean_file_data = std::fs::read("input_test_files/benign/clean_doc.pdf").unwrap();
         assert!(scan_pdf_for_active_content(&clean_file_data).is_ok());
 
-        let malicious_file_data = std::fs::read("input_test_files/malicious/pdf_js_bomb.pdf").unwrap();
+        let malicious_file_data =
+            std::fs::read("input_test_files/malicious/pdf_js_bomb.pdf").unwrap();
         assert!(scan_pdf_for_active_content(&malicious_file_data).is_err());
 
         // CSS and JS disk file validation checks
-        let css_file_data = std::fs::read_to_string("input_test_files/malicious/dangerous_styles.css").unwrap();
-        let (clean_css, _) = sanitize_css(&css_file_data, &Url::parse("https://localhost").unwrap());
+        let css_file_data =
+            std::fs::read_to_string("input_test_files/malicious/dangerous_styles.css").unwrap();
+        let (clean_css, _) =
+            sanitize_css(&css_file_data, &Url::parse("https://localhost").unwrap());
         assert!(clean_css.contains("url(\"\")"));
 
-        let js_file_data = std::fs::read_to_string("input_test_files/malicious/dangerous_script.js").unwrap();
+        let js_file_data =
+            std::fs::read_to_string("input_test_files/malicious/dangerous_script.js").unwrap();
         assert!(sanitize_javascript(&js_file_data).is_err());
     }
 }
