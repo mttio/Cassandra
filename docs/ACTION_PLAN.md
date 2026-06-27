@@ -49,7 +49,7 @@
   - Write inspectors to scan downloaded PDFs and other complex documents for embedded executable active content (e.g., Javascript in PDFs).
 - [x] **DoS Prevention**:
   - Prevent compression bombs (e.g., gzip/deflate recursion limits) and XML bombs (entity expansion attacks) when sanitizing structured text.
-- [ ] **Unicode Homograph Attacks**:
+- [x] **Unicode Homograph Attacks**:
   - Complete integration of IDN checks and Unicode normalization controls inside the HTML rewriter.
 
 ### 6. CLI & Application Integration (`cli_application`)
