@@ -1,5 +1,6 @@
 pub mod mime;
 
+use crate::errors::SanitizerError;
 use itertools::Itertools;
 use std::error::Error;
 use std::fmt::Display;
@@ -316,6 +317,79 @@ pub fn sanitize_css(css: &str, base_url: &Url) -> (String, Vec<(Url, String)>) {
     (output, extracted)
 }
 
+pub fn scan_pdf_for_active_content(data: &[u8]) -> Result<(), SanitizerError> {
+    let mut i = 0;
+    while i < data.len() {
+        // Check for stream block start
+        if i + 6 <= data.len() 
+            && &data[i..i + 6] == b"stream"
+            && (i == 0 || data[i - 1].is_ascii_whitespace() || data[i - 1] == b'>')
+        {
+            i += 6;
+            // Find "endstream"
+            let mut found_end = false;
+            while i + 9 <= data.len() {
+                if &data[i..i + 9] == b"endstream" {
+                    i += 9;
+                    found_end = true;
+                    break;
+                }
+                i += 1;
+            }
+            if !found_end {
+                break;
+            }
+            continue;
+        }
+
+        // Check for name keys outside stream blocks
+        if data[i] == b'/' {
+            if i + 3 <= data.len() && &data[i..i + 3] == b"/JS" {
+                let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
+                if is_pdf_delimiter(next_char) {
+                    return Err(SanitizerError::ActiveContent("JavaScript (/JS)".to_string()));
+                }
+            }
+            if i + 11 <= data.len() && &data[i..i + 11] == b"/JavaScript" {
+                let next_char = if i + 11 < data.len() { data[i + 11] } else { 0 };
+                if is_pdf_delimiter(next_char) {
+                    return Err(SanitizerError::ActiveContent("JavaScript".to_string()));
+                }
+            }
+            if i + 3 <= data.len() && &data[i..i + 3] == b"/AA" {
+                let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
+                if is_pdf_delimiter(next_char) {
+                    return Err(SanitizerError::ActiveContent("Additional Action (/AA)".to_string()));
+                }
+            }
+            if i + 11 <= data.len() && &data[i..i + 11] == b"/OpenAction" {
+                let next_char = if i + 11 < data.len() { data[i + 11] } else { 0 };
+                if is_pdf_delimiter(next_char) {
+                    return Err(SanitizerError::ActiveContent("OpenAction".to_string()));
+                }
+            }
+        }
+
+        i += 1;
+    }
+    Ok(())
+}
+
+fn is_pdf_delimiter(b: u8) -> bool {
+    b == 0 
+        || b.is_ascii_whitespace() 
+        || b == b'[' 
+        || b == b']' 
+        || b == b'<' 
+        || b == b'>' 
+        || b == b'(' 
+        || b == b')' 
+        || b == b'{' 
+        || b == b'}' 
+        || b == b'/' 
+        || b == b'%'
+}
+
 #[derive(Debug)]
 pub struct EntityScanner {
     match_idx: usize,
@@ -466,5 +540,35 @@ mod tests {
         let (rewritten, extracted) = sanitize_css(css, &base_url);
         assert!(rewritten.contains("url(\"\")"));
         assert_eq!(extracted.len(), 0);
+    }
+
+    #[test]
+    fn test_scan_pdf_for_active_content() {
+        // Clean PDF
+        let clean_pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+        assert!(scan_pdf_for_active_content(clean_pdf).is_ok());
+
+        // Malicious PDF with /JS key
+        let malicious_js = b"%PDF-1.4\n1 0 obj\n<< /Type /Action /JS (app.alert(1)) >>\nendobj\n";
+        assert!(scan_pdf_for_active_content(malicious_js).is_err());
+
+        // Malicious PDF with /OpenAction key
+        let malicious_open = b"%PDF-1.4\n1 0 obj\n<< /OpenAction 2 0 R >>\nendobj\n";
+        assert!(scan_pdf_for_active_content(malicious_open).is_err());
+
+        // PDF containing /JS inside a binary stream block (should pass)
+        let stream_pdf = b"%PDF-1.4\n1 0 obj\n<< /Length 20 >>\nstream\nrandom/JSdata\nendstream\nendobj\n";
+        assert!(scan_pdf_for_active_content(stream_pdf).is_ok());
+
+        // Boundary checks and fake stream check
+        let fake_stream = b"randomstream/JS";
+        assert!(scan_pdf_for_active_content(fake_stream).is_err());
+
+        // Files on disk
+        let clean_file_data = std::fs::read("input_test_files/benign/clean_doc.pdf").unwrap();
+        assert!(scan_pdf_for_active_content(&clean_file_data).is_ok());
+
+        let malicious_file_data = std::fs::read("input_test_files/malicious/pdf_js_bomb.pdf").unwrap();
+        assert!(scan_pdf_for_active_content(&malicious_file_data).is_err());
     }
 }

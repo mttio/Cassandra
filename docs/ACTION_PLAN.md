@@ -45,7 +45,7 @@
 ### 4. Advanced Security Inspections
 - [x] **MIME Sniffing (MIME Confusion)**:
   - Implement magic-number sniffing (content sniffing) on fetched HTTP streams to verify that contents match the declared `Content-Type` header.
-- [ ] **Active Document Inspection**:
+- [x] **Active Document Inspection**:
   - Write inspectors to scan downloaded PDFs and other complex documents for embedded executable active content (e.g., Javascript in PDFs).
 - [x] **DoS Prevention**:
   - Prevent compression bombs (e.g., gzip/deflate recursion limits) and XML bombs (entity expansion attacks) when sanitizing structured text.

@@ -150,7 +150,11 @@ pub fn run(args: Args) -> Result<()> {
         return Ok(());
     }
 
-    // Ensure output directory exists
+    // Ensure output directory is empty and exists
+    if args.output_dir.exists() {
+        fs::remove_dir_all(&args.output_dir)
+            .with_context(|| format!("Failed to empty output directory: {:?}", args.output_dir))?;
+    }
     fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("Failed to create output directory: {:?}", args.output_dir))?;
 

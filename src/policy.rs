@@ -117,6 +117,7 @@ pub struct ResourcesPolicy {
     pub max_requests: RuleWithValue<usize>,
     pub mismatched_mime: LogLevel,
     pub unknown_resource: LogLevel,
+    pub pdf_active_content: LogLevel,
 }
 
 impl Default for ResourcesPolicy {
@@ -128,6 +129,7 @@ impl Default for ResourcesPolicy {
             max_requests: RuleWithValue::new(5, LogLevel::Error),
             mismatched_mime: LogLevel::Error,
             unknown_resource: LogLevel::Error,
+            pdf_active_content: LogLevel::Error,
         }
     }
 }
