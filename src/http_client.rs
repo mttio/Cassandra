@@ -478,4 +478,21 @@ mod tests {
         assert!(!is_v4_reserved(Ipv4Addr::new(8, 8, 8, 8))); // public
         assert!(!is_v4_reserved(Ipv4Addr::new(1, 1, 1, 1))); // public
     }
+
+    #[tokio::test]
+    async fn test_ssrf_safe_dns_resolver_local() {
+        use std::str::FromStr;
+        let inner = TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let resolver = SsrfSafeDnsResolver {
+            inner: Arc::new(inner),
+            timeout: Duration::from_secs(2),
+        };
+        
+        let name = Name::from_str("localhost").unwrap();
+        let res = resolver.resolve(name).await;
+        if let Ok(addrs) = res {
+            let list: Vec<std::net::SocketAddr> = addrs.collect();
+            assert!(list.is_empty(), "localhost resolved to IPs but all should be filtered out: {:?}", list);
+        }
+    }
 }

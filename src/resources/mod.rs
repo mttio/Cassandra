@@ -524,6 +524,13 @@ mod tests {
         let url2 = Url::parse("https://example.com/no-ext").unwrap();
         let name2 = generate_local_filename(&url2, "png");
         assert!(name2.ends_with(".png"));
+
+        // Path traversal mitigation check
+        let url3 = Url::parse("https://example.com/../../../etc/passwd").unwrap();
+        let name3 = generate_local_filename(&url3, "txt");
+        assert!(!name3.contains(".."));
+        assert!(!name3.contains('/'));
+        assert!(!name3.contains('\\'));
     }
 
     #[test]
