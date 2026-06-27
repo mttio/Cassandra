@@ -55,6 +55,8 @@ pub enum SanitizerError {
     UnknownResourceType,
     #[error("Rewriting error: {0}")]
     Rewriting(#[source] RewritingError),
+    #[error("custom XML entity declaration detected (potential XML bomb)")]
+    XmlEntityDeclaration,
     Other(#[from] anyhow::Error),
 }
 

@@ -26,7 +26,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
 
-    println!("======= WELCOME TO THE WEB SANITIZER CLI INTERFACE =======");
+    println!(r#"
+    ____                  __                  
+   / __ \___  ____  ___  / /___  ____  ___    
+  / /_/ / _ \/ __ \/ _ \/ / __ \/ __ \/ _ \   
+ / ____/  __/ / / /  __/ / /_/ / /_/ /  __/   
+/_/    \___/_/ /_/\___/_/\____/ .___/\___/    
+                             /_/              
+"#);
+    println!("======= WELCOME TO THE PENELOPE WEB SANITIZER CLI INTERFACE =======");
 
     //run cli application
     if let Err(e) = run(args) {
@@ -41,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     /// Input files, directories or URLs
+    #[arg(required_unless_present = "generate_policy")]
     pub inputs: Vec<String>,
 
     /// Policy configuration file (JSON)

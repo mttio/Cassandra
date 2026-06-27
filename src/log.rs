@@ -153,3 +153,56 @@ pub fn logging_thread(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crawl_session::CrawlSession;
+    use crate::http_client::SanitizerHttpClient;
+    use crate::policy::Policy;
+    use std::collections::HashMap;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use std::fs;
+
+    #[test]
+    fn test_xml_bomb_rejection() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("temp_xml_bomb.html");
+        fs::write(
+            &file_path,
+            b"<!DOCTYPE xmlbomb [ <!ENTITY lol 'lol'> ]><html></html>",
+        )
+        .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let logger = Logger {
+            index: 0,
+            channel: tx,
+        };
+
+        let policy = Arc::new(Policy::default());
+        let url_map = Arc::new(Mutex::new(HashMap::new()));
+        let client = Arc::new(SanitizerHttpClient::new(policy.clone(), logger.channel.clone(), url_map.clone()).unwrap());
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
+        let session = Arc::new(CrawlSession::new(
+            client,
+            policy,
+            logger,
+            runtime.handle().clone(),
+            Arc::new(temp_dir.clone()),
+            url_map,
+        ));
+
+        session.process_file(file_path.clone());
+
+        // Clean up temp file
+        let _ = fs::remove_file(file_path);
+
+        // Retrieve the logged error
+        let msg = rx.try_recv().expect("Expected a log message");
+        let err_str = msg.message.to_string();
+        assert!(err_str.contains("custom XML entity declaration detected"));
+    }
+}

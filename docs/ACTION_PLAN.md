@@ -34,20 +34,20 @@
 *Focuses on the recursive sub-resource crawler, low-level security mitigations (SSRF, Bombs, MIME), CLI integration, and memory boundaries.*
 
 ### 3. Embedded Resource Handling (Crawler / Fetcher)
-- [ ] **Recursive Sub-Resource Crawling**:
+- [x] **Recursive Sub-Resource Crawling**:
   - Implement parsing of sub-resources (CSS, JavaScript files, images) from processed HTML documents.
   - Retrieve sub-resources recursively up to `max_depth` (from `policy.resources.max_depth`).
   - Enforce bounds on the total number of sub-resource requests (`max_requests`) and total bytes (`max_bytes`).
-- [ ] **SSRF & Path Traversal Mitigations**:
+- [x] **SSRF & Path Traversal Mitigations**:
   - Validate that fetched sub-resources do not lead to Path Traversal in the local directory tree.
   - Verify that URIs are resolved safely using the SSRF-safe DNS resolver.
 
 ### 4. Advanced Security Inspections
-- [ ] **MIME Sniffing (MIME Confusion)**:
+- [x] **MIME Sniffing (MIME Confusion)**:
   - Implement magic-number sniffing (content sniffing) on fetched HTTP streams to verify that contents match the declared `Content-Type` header.
 - [ ] **Active Document Inspection**:
   - Write inspectors to scan downloaded PDFs and other complex documents for embedded executable active content (e.g., Javascript in PDFs).
-- [ ] **DoS Prevention**:
+- [x] **DoS Prevention**:
   - Prevent compression bombs (e.g., gzip/deflate recursion limits) and XML bombs (entity expansion attacks) when sanitizing structured text.
 - [ ] **Unicode Homograph Attacks**:
   - Complete integration of IDN checks and Unicode normalization controls inside the HTML rewriter.
@@ -55,7 +55,7 @@
 ### 6. CLI & Application Integration (`cli_application`)
 - [ ] **Non-Zero Exit Codes**:
   - Modify the CLI so it returns a non-zero exit code if the sanitizer blocklist rules result in blocking/denying content outright.
-- [ ] **Code Cleanup**:
+- [x] **Code Cleanup**:
   - Resolve compiler warnings regarding unused variables and functions in `http_client.rs` and `cli.rs`.
 
 ---

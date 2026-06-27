@@ -223,12 +223,18 @@ impl CrawlSession {
             let mut rewriter =
                 create_rewriter(&self.logger, &self.policy, &mut crawler_state, output_file);
             let mut buffer = [0; 8192];
+            let mut entity_scanner = crate::resources::EntityScanner::new();
             loop {
                 let n = reader
                     .read(&mut buffer)
                     .with_context(|| format!("Failed to read chunk from file {:?}", path))?;
                 if n == 0 {
                     break;
+                }
+                if entity_scanner.feed_chunk(&buffer[..n]) {
+                    drop(rewriter);
+                    let _ = std::fs::remove_file(&output_path);
+                    return Err(SanitizerError::XmlEntityDeclaration.into());
                 }
                 rewriter.write(&buffer[..n])?;
             }
