@@ -49,7 +49,6 @@ pub struct Logger {
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum LogLevel {
-    Ignore,
     Trace,
     Debug,
     Info,
@@ -58,19 +57,13 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    pub fn is_ignore(&self) -> bool {
-        matches!(self, LogLevel::Ignore)
-    }
-
     /// Returns `Err` if `self == Error`, otherwise returns `Ok` and logs the message
     pub fn handle<T: Into<SanitizerMessage>>(
         self,
         logger: &impl LoggerTrait,
         message: T,
     ) -> Result<(), T> {
-        if self == LogLevel::Ignore {
-            Ok(())
-        } else if self == LogLevel::Error {
+        if self == LogLevel::Error {
             Err(message)
         } else {
             logger.log(self, message);
@@ -138,7 +131,6 @@ pub fn logging_thread(
                     LogLevel::Info => " INFO".bright_green(),
                     LogLevel::Warn => " WARN".bright_yellow(),
                     LogLevel::Error => "ERROR".bright_red(),
-                    LogLevel::Ignore => "IGNORE".bright_black(),
                 }
                 .bold(),
                 error.italic(),
@@ -160,7 +152,6 @@ pub fn logging_thread(
                     LogLevel::Info => " INFO",
                     LogLevel::Warn => " WARN",
                     LogLevel::Error => "ERROR",
-                    LogLevel::Ignore => "IGNORE",
                 },
                 strip_ansi_escapes::strip_str(&error),
             );
@@ -175,10 +166,10 @@ mod tests {
     use crate::crawl_session::CrawlSession;
     use crate::http_client::SanitizerHttpClient;
     use crate::policy::Policy;
-    use std::collections::HashMap;
     use parking_lot::Mutex;
-    use std::sync::Arc;
+    use std::collections::HashMap;
     use std::fs;
+    use std::sync::Arc;
 
     #[test]
     fn test_xml_bomb_rejection() {
@@ -198,7 +189,10 @@ mod tests {
 
         let policy = Arc::new(Policy::default());
         let url_map = Arc::new(Mutex::new(HashMap::new()));
-        let client = Arc::new(SanitizerHttpClient::new(policy.clone(), logger.channel.clone(), url_map.clone()).unwrap());
+        let client = Arc::new(
+            SanitizerHttpClient::new(policy.clone(), logger.channel.clone(), url_map.clone())
+                .unwrap(),
+        );
         let runtime = tokio::runtime::Runtime::new().unwrap();
 
         let session = Arc::new(CrawlSession::new(

@@ -1,7 +1,7 @@
+pub mod javascript;
 pub mod mime;
 
 use crate::errors::SanitizerError;
-use itertools::Itertools;
 use url::Url;
 
 /// Helper to generate a unique local filename deterministic for a URL.
@@ -139,49 +139,6 @@ pub fn strip_png_metadata(data: &[u8]) -> Vec<u8> {
         }
     }
     output
-}
-
-/// Scans JS file for dangerous constructs (eval, document.write).
-///
-/// # Inputs
-/// * `content` - A string slice containing the JavaScript source code.
-///
-/// # Returns
-/// * `Result<String, SanitizationError>` - `Ok(content)` if no dangerous keywords are found, otherwise an `Err(SanitizationError)` indicating what was found.
-pub fn sanitize_javascript(content: &str) -> Result<String, SanitizerError> {
-    let mut chars = content.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == 'e' {
-            let mut temp = chars.clone();
-            if temp.next_array() == Some(['v', 'a', 'l']) {
-                while let Some(&next_c) = temp.peek() {
-                    if next_c.is_whitespace() {
-                        temp.next();
-                    } else {
-                        break;
-                    }
-                }
-                if temp.peek() == Some(&'(') {
-                    return Err(SanitizerError::DangerousJsConstruct("eval(...)".to_owned()));
-                }
-            }
-        }
-        if c == 'd' {
-            let mut temp = chars.clone();
-            if temp.next_array() == Some(['o', 'c', 'u', 'm', 'e', 'n', 't']) {
-                let mut temp = temp.skip_while(|c| c.is_whitespace());
-                if temp.next() == Some('.') {
-                    let mut temp = temp.skip_while(|c| c.is_whitespace());
-                    if temp.next_array() == Some(['w', 'r', 'i', 't', 'e']) {
-                        return Err(SanitizerError::DangerousJsConstruct(
-                            "document.write(...)".to_owned(),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    Ok(content.to_string())
 }
 
 /// Scans CSS content for @import and url(...) references, validates/rewrites them, and extracts them.
@@ -481,9 +438,9 @@ mod tests {
 
     #[test]
     fn test_sanitize_javascript() {
-        assert!(sanitize_javascript("console.log('hello');").is_ok());
-        assert!(sanitize_javascript("eval('1 + 1');").is_err());
-        assert!(sanitize_javascript("document.write('xss');").is_err());
+        assert!(javascript::sanitize("console.log('hello');").is_ok());
+        assert!(javascript::sanitize("eval('1 + 1');").is_err());
+        assert!(javascript::sanitize("document.write('xss');").is_err());
     }
 
     #[test]
@@ -526,9 +483,9 @@ mod tests {
 
     #[test]
     fn test_sanitize_javascript_spaces() {
-        assert!(sanitize_javascript("eval    (  '1+1'  )").is_err());
-        assert!(sanitize_javascript("let evaluator = 1;").is_ok());
-        assert!(sanitize_javascript("document.write()").is_err());
+        assert!(javascript::sanitize("eval    (  '1+1'  )").is_err());
+        assert!(javascript::sanitize("let evaluator = 1;").is_ok());
+        assert!(javascript::sanitize("document.write()").is_err());
     }
 
     #[test]
@@ -580,6 +537,6 @@ mod tests {
 
         let js_file_data =
             std::fs::read_to_string("input_test_files/malicious/dangerous_script.js").unwrap();
-        assert!(sanitize_javascript(&js_file_data).is_err());
+        assert!(javascript::sanitize(&js_file_data).is_err());
     }
 }

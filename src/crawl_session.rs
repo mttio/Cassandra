@@ -133,34 +133,32 @@ impl CrawlSession {
             sanitized_css.into_bytes()
         } else if is_js {
             let js_str = String::from_utf8_lossy(&fetched.data);
-            crate::resources::sanitize_javascript(&js_str)
-                .map(|x| x.into_bytes())
+            crate::resources::javascript::sanitize(&js_str)
+                .map(|_| None)
                 .or_else(|e| {
-                    self.policy
-                        .resources
-                        .dangerous_js
-                        .handle(&self.logger, e)
-                        .map(|_| {
-                            b"/* Blocked by Web Sanitizer: dangerous keywords found */".to_vec()
-                        })
+                    self.policy.resources.dangerous_js.handle(
+                        &self.logger,
+                        |x| x.as_bytes().to_vec(),
+                        e,
+                    )
                 })?
+                .unwrap_or(fetched.data)
         } else if is_pdf {
-            match crate::resources::scan_pdf_for_active_content(&fetched.data) {
-                Ok(_) => fetched.data.clone(),
-                Err(err) => {
-                    self.policy
-                        .resources
-                        .pdf_active_content
-                        .handle(&self.logger, err)?;
-                    fetched.data.clone()
-                }
+            if let Err(e) = crate::resources::scan_pdf_for_active_content(&fetched.data) {
+                self.policy
+                    .resources
+                    .pdf_active_content
+                    .handle(&self.logger, e)?;
             }
+
+            fetched.data
         } else {
             self.policy
                 .resources
                 .unknown_resource
                 .handle(&self.logger, SanitizerError::UnknownResourceType)?;
-            fetched.data.clone()
+
+            fetched.data
         };
 
         let sub_path = self.output_dir.join(&local_name);
@@ -264,13 +262,16 @@ impl CrawlSession {
         let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
         let js_str = String::from_utf8_lossy(&data);
 
-        let to_write = crate::resources::sanitize_javascript(&js_str).or_else(|e| {
-            self.policy
-                .resources
-                .dangerous_js
-                .handle(&self.logger, e)
-                .map(|_| "/* Blocked by Web Sanitizer: dangerous keywords found */".to_owned())
-        })?;
+        let to_write = crate::resources::javascript::sanitize(&js_str)
+            .map(|_| None)
+            .or_else(|e| {
+                self.policy.resources.dangerous_js.handle(
+                    &self.logger,
+                    |x| x.as_bytes().to_vec(),
+                    e,
+                )
+            })?
+            .unwrap_or(data);
 
         fs::write(&output_path, to_write).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
 

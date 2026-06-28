@@ -1,11 +1,12 @@
 use std::{fmt::Debug, time::Duration};
 
+use nutype::nutype;
 use serde::{Deserialize, Serialize};
 use url::Host;
 
 use crate::{
     log::LogLevel,
-    rules::{RuleWithReplace, RuleWithValue},
+    rules::{JsReplace, RuleWithReplace, RuleWithValue},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,53 +60,55 @@ pub struct Policy {
     pub connections: ConnectionsPolicy,
 }
 
-// Newtype to remove invalid characters in HTML attributes
-#[derive(Debug, Default)]
+fn sanitize_attribute(s: String) -> String {
+    s.replace([' ', '\n', '\r', '\t', '\x0C', '/', '>', '='], "")
+}
+
+/// Newtype to remove invalid characters in HTML attributes.
+/// Removes the attribute if empty.
+#[nutype(
+    derive(Debug, Default, AsRef, Deserialize, Serialize),
+    sanitize(with = sanitize_attribute),
+    default = ""
+)]
 pub struct AttributeString(String);
 
 impl AttributeString {
-    pub fn new(s: &str) -> Self {
-        Self(s.replace([' ', '\n', '\r', '\t', '\x0C', '/', '>', '='], ""))
-    }
-
-    pub fn inner(&self) -> Option<&str> {
-        if self.0.is_empty() {
-            None
-        } else {
-            Some(&self.0)
-        }
-    }
-
     pub fn replace_attribute(
         &self,
         name: &str,
         element: &mut lol_html::html_content::Element<impl lol_html::HandlerTypes>,
     ) {
-        match self.inner() {
-            None => element.remove_attribute(name),
-            Some(x) => {
-                // SAFETY: we removed all invalid characters
-                let _ = element.set_attribute(name, x);
-            }
+        if self.as_ref().is_empty() {
+            element.remove_attribute(name)
+        } else {
+            // SAFETY: we removed all invalid characters
+            let _ = element.set_attribute(name, self.as_ref());
         }
     }
 }
 
-impl Serialize for AttributeString {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.0)
-    }
-}
+/// Newtype to remove invalid characters in HTML url attributes.
+/// Removes the attribute if empty.
+#[nutype(
+    derive(Debug, Default, AsRef, Deserialize, Serialize),
+    sanitize(with = sanitize_attribute),
+    default = "#"
+)]
+pub struct AttributeUrl(String);
 
-impl<'de> Deserialize<'de> for AttributeString {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        String::deserialize(deserializer).map(|x| Self::new(&x))
+impl AttributeUrl {
+    pub fn replace_attribute(
+        &self,
+        name: &str,
+        element: &mut lol_html::html_content::Element<impl lol_html::HandlerTypes>,
+    ) {
+        if self.as_ref().is_empty() {
+            element.remove_attribute(name)
+        } else {
+            // SAFETY: we removed all invalid characters
+            let _ = element.set_attribute(name, self.as_ref());
+        }
     }
 }
 
@@ -117,9 +120,9 @@ pub struct HtmlPolicy {
     /// Action to perform when an event handler is encountered
     pub event_handlers: RuleWithReplace<AttributeString>,
     /// Action to perform when a dangerous domain is encountered
-    pub dangerous_domain: RuleWithReplace<String>,
+    pub dangerous_domain: RuleWithReplace<AttributeUrl>,
     /// Action to perform when a dangerous URI (javascript:, data:) is encountered
-    pub dangerous_uris: RuleWithReplace<AttributeString>,
+    pub dangerous_uris: RuleWithReplace<AttributeUrl>,
 }
 
 impl Default for HtmlPolicy {
@@ -131,9 +134,9 @@ impl Default for HtmlPolicy {
                 .flat_map(Host::parse)
                 .map(PolicyHost)
                 .collect(),
-            event_handlers: RuleWithReplace::new(AttributeString::new(""), LogLevel::Info),
-            dangerous_domain: RuleWithReplace::new("#".to_owned(), LogLevel::Error),
-            dangerous_uris: RuleWithReplace::new(AttributeString::new("#"), LogLevel::Info),
+            event_handlers: RuleWithReplace::with_default(LogLevel::Info),
+            dangerous_domain: RuleWithReplace::with_default(LogLevel::Error),
+            dangerous_uris: RuleWithReplace::with_default(LogLevel::Info),
         }
     }
 }
@@ -171,7 +174,7 @@ pub struct ResourcesPolicy {
     pub mismatched_mime: LogLevel,
     pub unknown_resource: LogLevel,
     pub pdf_active_content: LogLevel,
-    pub dangerous_js: LogLevel,
+    pub dangerous_js: RuleWithReplace<JsReplace>,
 }
 
 impl Default for ResourcesPolicy {
@@ -184,7 +187,7 @@ impl Default for ResourcesPolicy {
             mismatched_mime: LogLevel::Error,
             unknown_resource: LogLevel::Error,
             pdf_active_content: LogLevel::Error,
-            dangerous_js: LogLevel::Error,
+            dangerous_js: RuleWithReplace::with_default(LogLevel::Error),
         }
     }
 }

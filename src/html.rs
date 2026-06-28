@@ -9,7 +9,7 @@ use url::Url;
 use crate::{
     errors::SanitizerError,
     log::{Logger, LoggerTrait},
-    policy::{AttributeString, Policy},
+    policy::{AttributeUrl, Policy},
     url::RuleMatch,
 };
 
@@ -39,8 +39,6 @@ fn handle_dangerous_link(
         if let Ok(mut resolved_url) = resolved
             && let Some(host) = resolved_url.host()
         {
-            let host = host.to_owned();
-
             // Check IDN
             if let Some(original) = crate::url::check_domain(&resolved_url) {
                 let err = SanitizerError::Idn(original);
@@ -52,6 +50,8 @@ fn handle_dangerous_link(
                 }
             }
 
+            let host = host.to_owned();
+
             let is_dangerous = policy
                 .urls
                 .dangerous_domains
@@ -61,20 +61,19 @@ fn handle_dangerous_link(
             let location = el.source_location();
 
             if is_dangerous {
-                return policy.html.dangerous_domain.handle(
+                policy.html.dangerous_domain.handle(
                     logger,
                     |x| {
-                        let new = match resolved_url.set_host(Some(x)) {
+                        let new = match resolved_url.set_host(Some(x.as_ref())) {
                             // If policy value is a valid host, replace the host of the old url
-                            Ok(_) => resolved_url.as_ref(),
+                            Ok(_) => &AttributeUrl::new(resolved_url.as_ref()),
                             // Otherwise replace the whole url with the policy value
                             Err(_) => x,
                         };
 
-                        AttributeString::new(new).replace_attribute(attr_name, el);
-                        Ok(())
+                        new.replace_attribute(attr_name, el);
                     },
-                    SanitizerError::DangerousDomainInHtml(host.to_owned(), location.bytes().start),
+                    SanitizerError::DangerousDomainInHtml(host, location.bytes().start),
                 )?;
             }
         }
@@ -135,48 +134,44 @@ pub fn create_rewriter<'a, W: Write>(
     let element_content_handlers = if policy.resources.fetch_sub_resources {
         vec![
             element!("*", move |el| {
-                if !policy.html.event_handlers.is_ignore() {
-                    let event_attrs: Vec<String> = el
-                        .attributes()
-                        .iter()
-                        .map(|attr| attr.name())
-                        .filter(|name| name.to_lowercase().starts_with("on"))
-                        .collect();
+                let event_attrs: Vec<_> = el
+                    .attributes()
+                    .iter()
+                    .map(|attr| attr.name())
+                    .filter(|name| name.to_lowercase().starts_with("on"))
+                    .collect();
 
-                    for attr_name in event_attrs {
-                        let location = el.source_location();
-                        policy.html.event_handlers.handle(
-                            logger,
-                            |replacement| replacement.replace_attribute(&attr_name, el),
-                            SanitizerError::EventHandler(
-                                attr_name.clone(),
-                                Some(location.bytes().start),
-                            ),
-                        )?;
-                    }
+                for attr_name in event_attrs {
+                    let location = el.source_location();
+                    policy.html.event_handlers.handle(
+                        logger,
+                        |x| x.replace_attribute(&attr_name, el),
+                        SanitizerError::EventHandler(
+                            attr_name.clone(),
+                            Some(location.bytes().start),
+                        ),
+                    )?;
                 }
 
-                if !policy.html.dangerous_uris.is_ignore() {
-                    let dangerous_uri_attrs: Vec<(String, String)> = el
-                        .attributes()
-                        .iter()
-                        .map(|attr| (attr.name(), attr.value()))
-                        .filter(|(_, val)| {
-                            let val_trimmed = val.trim().to_lowercase();
-                            val_trimmed.starts_with("javascript:")
-                                || val_trimmed.starts_with("data:")
-                        })
-                        .collect();
+                let dangerous_uri_attrs: Vec<_> = el
+                    .attributes()
+                    .iter()
+                    .map(|attr| (attr.name(), attr.value()))
+                    .filter(|(_, val)| {
+                        let val_trimmed = val.trim().to_lowercase();
+                        val_trimmed.starts_with("javascript:") || val_trimmed.starts_with("data:")
+                    })
+                    .collect();
 
-                    for (attr_name, val) in dangerous_uri_attrs {
-                        let location = el.source_location();
-                        policy.html.dangerous_uris.handle(
-                            logger,
-                            |replacement| replacement.replace_attribute(&attr_name, el),
-                            SanitizerError::DangerousUri(val, Some(location.bytes().start)),
-                        )?;
-                    }
+                for (attr_name, val) in dangerous_uri_attrs {
+                    let location = el.source_location();
+                    policy.html.dangerous_uris.handle(
+                        logger,
+                        |x| x.replace_attribute(&attr_name, el),
+                        SanitizerError::DangerousUri(val, Some(location.bytes().start)),
+                    )?;
                 }
+
                 Ok(())
             }),
             element!(
@@ -293,9 +288,9 @@ pub fn create_rewriter<'a, W: Write>(
                                             .any(|x| x.0.matches(&host_owned));
                                         if is_dangerous {
                                             let location = el.source_location();
-                                            let _ = policy.html.dangerous_domain.handle(
+                                            policy.html.dangerous_domain.handle(
                                                 logger,
-                                                |x| el.set_attribute(attr_name, x),
+                                                |x| x.replace_attribute(attr_name, el),
                                                 SanitizerError::DangerousDomainInHtml(
                                                     host_owned,
                                                     location.bytes().start,
@@ -359,48 +354,44 @@ pub fn create_rewriter<'a, W: Write>(
         let base_url = state.base.clone();
         vec![
             element!("*", move |el| {
-                if !policy.html.event_handlers.is_ignore() {
-                    let event_attrs: Vec<String> = el
-                        .attributes()
-                        .iter()
-                        .map(|attr| attr.name())
-                        .filter(|name| name.to_lowercase().starts_with("on"))
-                        .collect();
+                let event_attrs: Vec<String> = el
+                    .attributes()
+                    .iter()
+                    .map(|attr| attr.name())
+                    .filter(|name| name.to_lowercase().starts_with("on"))
+                    .collect();
 
-                    for attr_name in event_attrs {
-                        let location = el.source_location();
-                        policy.html.event_handlers.handle(
-                            logger,
-                            |replacement| replacement.replace_attribute(&attr_name, el),
-                            SanitizerError::EventHandler(
-                                attr_name.clone(),
-                                Some(location.bytes().start),
-                            ),
-                        )?;
-                    }
+                for attr_name in event_attrs {
+                    let location = el.source_location();
+                    policy.html.event_handlers.handle(
+                        logger,
+                        |x| x.replace_attribute(&attr_name, el),
+                        SanitizerError::EventHandler(
+                            attr_name.clone(),
+                            Some(location.bytes().start),
+                        ),
+                    )?;
                 }
 
-                if !policy.html.dangerous_uris.is_ignore() {
-                    let dangerous_uri_attrs: Vec<(String, String)> = el
-                        .attributes()
-                        .iter()
-                        .map(|attr| (attr.name(), attr.value()))
-                        .filter(|(_, val)| {
-                            let val_trimmed = val.trim().to_lowercase();
-                            val_trimmed.starts_with("javascript:")
-                                || val_trimmed.starts_with("data:")
-                        })
-                        .collect();
+                let dangerous_uri_attrs: Vec<(String, String)> = el
+                    .attributes()
+                    .iter()
+                    .map(|attr| (attr.name(), attr.value()))
+                    .filter(|(_, val)| {
+                        let val_trimmed = val.trim().to_lowercase();
+                        val_trimmed.starts_with("javascript:") || val_trimmed.starts_with("data:")
+                    })
+                    .collect();
 
-                    for (attr_name, val) in dangerous_uri_attrs {
-                        let location = el.source_location();
-                        policy.html.dangerous_uris.handle(
-                            logger,
-                            |replacement| replacement.replace_attribute(&attr_name, el),
-                            SanitizerError::DangerousUri(val, Some(location.bytes().start)),
-                        )?;
-                    }
+                for (attr_name, val) in dangerous_uri_attrs {
+                    let location = el.source_location();
+                    policy.html.dangerous_uris.handle(
+                        logger,
+                        |x| x.replace_attribute(&attr_name, el),
+                        SanitizerError::DangerousUri(val, Some(location.bytes().start)),
+                    )?;
                 }
+
                 Ok(())
             }),
             element!("a[href], link[href], script", move |el| {
@@ -467,9 +458,9 @@ pub fn create_rewriter<'a, W: Write>(
                     let location = el.source_location();
 
                     if is_dangerous {
-                        let _ = policy.html.dangerous_domain.handle(
+                        policy.html.dangerous_domain.handle(
                             logger,
-                            |x| el.set_attribute("href", x),
+                            |x| x.replace_attribute("href", el),
                             SanitizerError::DangerousDomainInHtml(
                                 host.to_owned(),
                                 location.bytes().start,
@@ -527,7 +518,11 @@ pub fn create_rewriter<'a, W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{log::Logger, policy::AttributeString};
+    use crate::{
+        log::{LogLevel, Logger},
+        policy::AttributeString,
+        rules::RuleWithReplace,
+    };
     use std::sync::mpsc::{self, channel};
 
     #[test]
@@ -565,10 +560,8 @@ mod tests {
             channel: tx,
         };
         let mut policy = Policy::default();
-        policy.html.event_handlers = crate::rules::RuleWithReplace::new(
-            AttributeString::new("alert('blocked')"),
-            crate::log::LogLevel::Info,
-        );
+        policy.html.event_handlers =
+            RuleWithReplace::new(AttributeString::new("alert('blocked')"), LogLevel::Info);
 
         let input_html = b"<button onclick=\"alert(1)\"></button>";
         let mut output = Vec::new();
@@ -593,10 +586,7 @@ mod tests {
             channel: tx,
         };
         let mut policy = Policy::default();
-        policy.html.event_handlers = crate::rules::RuleWithReplace::new(
-            AttributeString::new(""),
-            crate::log::LogLevel::Ignore,
-        );
+        policy.html.event_handlers = RuleWithReplace::keep(LogLevel::Trace);
 
         let input_html = b"<button onclick=\"alert(1)\"></button>";
         let mut output = Vec::new();
@@ -722,10 +712,7 @@ mod tests {
             channel: tx,
         };
         let mut policy = Policy::default();
-        policy.html.dangerous_uris = crate::rules::RuleWithReplace::new(
-            AttributeString::new("#"),
-            crate::log::LogLevel::Info,
-        );
+        policy.html.dangerous_uris = RuleWithReplace::with_default(LogLevel::Info);
 
         let input_html = b"<a href=\"javascript:alert(1)\" src=\"  data:text/html,malicious  \" data-url=\"other\">link</a>";
         let mut output = Vec::new();
@@ -752,10 +739,7 @@ mod tests {
             channel: tx,
         };
         let mut policy = Policy::default();
-        policy.html.dangerous_uris = crate::rules::RuleWithReplace::new(
-            AttributeString::new(""),
-            crate::log::LogLevel::Info,
-        );
+        policy.html.dangerous_uris = RuleWithReplace::new(AttributeUrl::new(""), LogLevel::Info);
 
         let input_html = b"<a href=\"\n\t javascript:alert(1)\">link</a>";
         let mut output = Vec::new();
@@ -781,10 +765,7 @@ mod tests {
             channel: tx,
         };
         let mut policy = Policy::default();
-        policy.html.dangerous_uris = crate::rules::RuleWithReplace::new(
-            AttributeString::new("#"),
-            crate::log::LogLevel::Ignore,
-        );
+        policy.html.dangerous_uris = RuleWithReplace::keep(LogLevel::Trace);
 
         let input_html = b"<a href=\"javascript:alert(1)\">link</a>";
         let mut output = Vec::new();
@@ -811,7 +792,7 @@ mod tests {
 
         // Case 1: IDN is Warn (default). It should preserve the link.
         let mut policy = Policy::default();
-        policy.urls.idn = crate::log::LogLevel::Warn;
+        policy.urls.idn = LogLevel::Warn;
         policy.resources.fetch_sub_resources = false;
 
         let mut crawler_state = CrawlerState {
@@ -834,7 +815,7 @@ mod tests {
         );
 
         // Case 2: IDN is Error (Block). It should rewrite to "#".
-        policy.urls.idn = crate::log::LogLevel::Error;
+        policy.urls.idn = LogLevel::Error;
         let mut output2 = Vec::new();
         {
             let mut rewriter = create_rewriter(&logger, &policy, &mut crawler_state, &mut output2);
