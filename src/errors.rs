@@ -1,6 +1,5 @@
-use std::fmt::Display;
+use std::{fmt::Display, ops::Range, path::PathBuf};
 
-use anyhow::anyhow;
 use colored::Colorize;
 use hickory_resolver::net::NetError;
 use lol_html::errors::RewritingError;
@@ -11,14 +10,18 @@ use url::{Host, Url};
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub enum SanitizerError {
-    #[error("DNS resolution timed out for host: {}", .0)]
+    #[error("Failed to create HTTP client: {0}")]
+    CreateHttpClient(Box<dyn std::error::Error + Send + Sync>),
+    #[error("DNS resolution timed out for host: {0}")]
     Timeout(String),
-    #[error("DNS lookup failed for host {}: {}", .0, .1)]
+    #[error("DNS lookup failed for host {0}: {1}")]
     DnsLookup(String, NetError),
     #[error("too many redirects (max = {})", .0.to_string().bright_cyan())]
     TooManyRedirects(usize),
     #[error("Only HTTPS URLs are permitted")]
     NonHttpsUrl,
+    #[error("Server returned error status: {0}")]
+    ServerStatus(reqwest::StatusCode),
     #[error("dangerous domain ({})", .0.to_string().bright_cyan())]
     DangerousDomain(Host),
     #[error("dangerous domain ({}) @ {}", .0.to_string().bright_cyan(), .1.to_string().bright_magenta())]
@@ -44,18 +47,19 @@ pub enum SanitizerError {
     #[error("IDN url ({})", .0)]
     Idn(String),
     #[error(
-        "blocked script (source = {}) @ {}",
+        "blocked script (source = {}) @ {}..{}",
         .0.bright_cyan(),
-        .1.to_string().bright_magenta(),
+        .1.start.to_string().bright_magenta(),
+        .1.end.to_string().bright_magenta(),
     )]
-    BlockedScript(String, usize),
+    BlockedScript(String, Range<usize>),
     #[error(
         "response body exceeds maximum size ({} bytes)",
         .0.to_string().bright_cyan(),        
     )]
     ContentTooLong(usize),
     #[error(
-        "MIME mismatch (declared = {}, sniffed = {})",
+        "MIME mismatch (expected = {}, actual = {})",
         .0.as_deref().unwrap_or("<none>"),
         .1.as_deref().unwrap_or("<none>"),
     )]
@@ -64,8 +68,8 @@ pub enum SanitizerError {
     MaxSubresources(usize),
     #[error("Sub-resource crawl depth limit reached: max_requests = {}", .0)]
     MaxSubresourceDepth(usize),
-    #[error("Failed to fetch sub-resource {0}: {1}")]
-    SubresourceFetch(Url, Box<Self>),
+    #[error("Failed to fetch {} {}: {}", if *.2 { "sub-resource" } else { "url" }, .0, .1)]
+    UrlFetch(Url, Box<Self>, bool),
     #[error("Unknown resource type")]
     UnknownResourceType,
     #[error("Rewriting error: {0}")]
@@ -74,7 +78,21 @@ pub enum SanitizerError {
     XmlEntityDeclaration,
     #[error("embedded active content ({0}) detected")]
     ActiveContent(String),
-    Other(#[from] anyhow::Error),
+    #[error("Failed to open file: {0} ({1})")]
+    OpenFile(PathBuf, std::io::Error),
+    #[error("Failed to create file: {0} ({1})")]
+    CreateFile(PathBuf, std::io::Error),
+    #[error("Failed to read file: {0} ({1})")]
+    ReadFile(PathBuf, std::io::Error),
+    #[error("Failed to write to file: {0} ({1})")]
+    WriteFile(PathBuf, std::io::Error),
+    #[error("Error while streaming body: {0}")]
+    Streaming(reqwest::Error),
+    #[error("Request failed for URL {0}: {1}")]
+    Request(Url, reqwest::Error),
+    #[error("Dangerous construct `{0}` detected in JS")]
+    DangerousJsConstruct(String),
+    Other(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 /// A message that the sanitizer can produce
@@ -111,14 +129,13 @@ impl From<RewritingError> for SanitizerError {
         match value {
             RewritingError::ContentHandlerError(e) => {
                 // Extract the error returned inside the `element!()` macro
-                match e.downcast::<SanitizerError>() {
+                match e.downcast::<Self>() {
                     Ok(e) => *e,
-                    Err(e) => SanitizerError::Other(anyhow!("{e}"))
-                }                    
+                    Err(e) => Self::Other(e)
+                }
             }
-            e => SanitizerError::Rewriting(e),            
+            RewritingError::MemoryLimitExceeded(e) => Self::Other(Box::new(e)),
+            RewritingError::ParsingAmbiguity(e) => Self::Other(Box::new(e)),
         }
     }
 }
-
-pub type LoggerError = Box<dyn std::error::Error + Send + Sync>;

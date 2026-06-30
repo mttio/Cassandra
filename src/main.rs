@@ -26,30 +26,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
 
-    println!("{}", r#"
+    println!(
+        "{}",
+        r#"
     ____                  __                  
    / __ \___  ____  ___  / /___  ____  ___    
   / /_/ / _ \/ __ \/ _ \/ / __ \/ __ \/ _ \   
  / ____/  __/ / / /  __/ / /_/ / /_/ /  __/   
 /_/    \___/_/ /_/\___/_/\____/ .___/\___/    
                              /_/              
-"#.cyan().bold());
-    println!("{}", "[+] Welcome to the Penelope Web Sanitizer CLI Interface".bright_blue().bold());
-    println!("{}", "==========================================================".bright_blue());
+"#
+        .cyan()
+        .bold()
+    );
+    println!(
+        "{}",
+        "[+] Welcome to the Penelope Web Sanitizer CLI Interface"
+            .bright_blue()
+            .bold()
+    );
+    println!(
+        "{}",
+        "==========================================================".bright_blue()
+    );
 
     //run cli application
     match run(args) {
         Ok(true) => {
-            println!("{}", "======================== GOODBYE =========================".bright_black().bold());
+            println!(
+                "{}",
+                "======================== GOODBYE ========================="
+                    .bright_black()
+                    .bold()
+            );
             std::process::exit(0);
         }
         Ok(false) => {
-            println!("{}", "======================== GOODBYE =========================".bright_black().bold());
+            println!(
+                "{}",
+                "======================== GOODBYE ========================="
+                    .bright_black()
+                    .bold()
+            );
             std::process::exit(1);
         }
         Err(e) => {
             eprintln!("{} {:?}", "Application error:".red().bold(), e);
-            println!("{}", "======================== GOODBYE =========================".bright_black().bold());
+            println!(
+                "{}",
+                "======================== GOODBYE ========================="
+                    .bright_black()
+                    .bold()
+            );
             std::process::exit(1);
         }
     }
@@ -153,17 +181,25 @@ fn parse_inputs(inputs: Vec<String>) -> Result<Vec<InputSource>> {
 /// * `Result<bool>` - `Ok(true)` if clean/no blocklist errors, `Ok(false)` if blocked/denied content occurred, or an error if initialization fails.
 pub fn run(args: Args) -> Result<bool> {
     let policy = load_policy(args.policy.as_ref())?;
-    
+
     // Print argument summary
-    println!("\n{}", "[SYSTEM] ACTIVE CONFIGURATION SUMMARY:".bright_blue().bold());
+    println!(
+        "\n{}",
+        "[SYSTEM] ACTIVE CONFIGURATION SUMMARY:"
+            .bright_blue()
+            .bold()
+    );
     println!("  [Inputs]:     {:?}", args.inputs);
-    println!("  [Policy]:     {}", match &args.policy {
-        Some(p) => format!("{:?}", p),
-        None => "Default Embedded Policy".to_owned()
-    });
+    println!(
+        "  [Policy]:     {}",
+        match &args.policy {
+            Some(p) => format!("{:?}", p),
+            None => "Default Embedded Policy".to_owned(),
+        }
+    );
     println!("  [Output Dir]: {:?}", args.output_dir);
     println!("  [Workers]:    {}", args.workers.to_string().yellow());
-    println!("");
+    println!();
 
     let sources = parse_inputs(args.inputs)?;
 
@@ -173,7 +209,10 @@ pub fn run(args: Args) -> Result<bool> {
     }
 
     // Step 1: Clean output directory
-    println!("{}", "[1/3] Cleaning output folder...".bright_black().bold());
+    println!(
+        "{}",
+        "[1/3] Cleaning output folder...".bright_black().bold()
+    );
     if args.output_dir.exists() {
         fs::remove_dir_all(&args.output_dir)
             .with_context(|| format!("Failed to empty output directory: {:?}", args.output_dir))?;
@@ -182,7 +221,12 @@ pub fn run(args: Args) -> Result<bool> {
         .with_context(|| format!("Failed to create output directory: {:?}", args.output_dir))?;
 
     // Step 2: Initialize parallel pipeline
-    println!("{}", "[2/3] Initializing parallel sanitization pipeline...".bright_black().bold());
+    println!(
+        "{}",
+        "[2/3] Initializing parallel sanitization pipeline..."
+            .bright_black()
+            .bold()
+    );
     let (tx, rx) = std::sync::mpsc::channel();
 
     let policy = Arc::new(policy);
@@ -196,7 +240,12 @@ pub fn run(args: Args) -> Result<bool> {
     let max_size = sources.len();
 
     // Step 3: Run and log
-    println!("{}", "[3/3] Processing inputs & streaming logs...".bright_black().bold());
+    println!(
+        "{}",
+        "[3/3] Processing inputs & streaming logs..."
+            .bright_black()
+            .bold()
+    );
     let library_result = web_sanitizer_sysprog::library(
         &runtime,
         sources,
@@ -212,13 +261,18 @@ pub fn run(args: Args) -> Result<bool> {
                 println!("\n{}", "[-] Execution complete with policy blocks/errors. Checked files have been processed.".red().bold());
                 Ok(false)
             } else {
-                println!("\n{}", "[+] Execution complete! Checked files have been processed.".bright_blue().bold());
+                println!(
+                    "\n{}",
+                    "[+] Execution complete! Checked files have been processed."
+                        .bright_blue()
+                        .bold()
+                );
                 Ok(true)
             }
         }
         Err(e) => {
             println!("\n{}", "[-] Sanitization failed with error:".red().bold());
-            Err(e)
+            Err(e.into())
         }
     }
 }

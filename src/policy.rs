@@ -1,11 +1,12 @@
 use std::{fmt::Debug, time::Duration};
 
+use nutype::nutype;
 use serde::{Deserialize, Serialize};
 use url::Host;
 
 use crate::{
     log::LogLevel,
-    rules::{RuleWithReplace, RuleWithValue},
+    rules::{JsReplace, RuleWithReplace, RuleWithValue},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,17 +60,69 @@ pub struct Policy {
     pub connections: ConnectionsPolicy,
 }
 
+fn sanitize_attribute(s: String) -> String {
+    s.replace([' ', '\n', '\r', '\t', '\x0C', '/', '>', '='], "")
+}
+
+/// Newtype to remove invalid characters in HTML attributes.
+/// Removes the attribute if empty.
+#[nutype(
+    derive(Debug, Default, AsRef, Deserialize, Serialize),
+    sanitize(with = sanitize_attribute),
+    default = ""
+)]
+pub struct AttributeString(String);
+
+impl AttributeString {
+    pub fn replace_attribute(
+        &self,
+        name: &str,
+        element: &mut lol_html::html_content::Element<impl lol_html::HandlerTypes>,
+    ) {
+        if self.as_ref().is_empty() {
+            element.remove_attribute(name)
+        } else {
+            // SAFETY: we removed all invalid characters
+            let _ = element.set_attribute(name, self.as_ref());
+        }
+    }
+}
+
+/// Newtype to remove invalid characters in HTML url attributes.
+/// Removes the attribute if empty.
+#[nutype(
+    derive(Debug, Default, AsRef, Deserialize, Serialize),
+    sanitize(with = sanitize_attribute),
+    default = "#"
+)]
+pub struct AttributeUrl(String);
+
+impl AttributeUrl {
+    pub fn replace_attribute(
+        &self,
+        name: &str,
+        element: &mut lol_html::html_content::Element<impl lol_html::HandlerTypes>,
+    ) {
+        if self.as_ref().is_empty() {
+            element.remove_attribute(name)
+        } else {
+            // SAFETY: we removed all invalid characters
+            let _ = element.set_attribute(name, self.as_ref());
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HtmlPolicy {
     pub allow_scripts: Vec<String>,
     pub allow_origins: Vec<PolicyHost>,
     /// Action to perform when an event handler is encountered
-    pub event_handlers: RuleWithReplace<String>,
+    pub event_handlers: RuleWithReplace<AttributeString>,
     /// Action to perform when a dangerous domain is encountered
-    pub dangerous_domain: RuleWithReplace<String>,
+    pub dangerous_domain: RuleWithReplace<AttributeUrl>,
     /// Action to perform when a dangerous URI (javascript:, data:) is encountered
-    pub dangerous_uris: RuleWithReplace<String>,
+    pub dangerous_uris: RuleWithReplace<AttributeUrl>,
 }
 
 impl Default for HtmlPolicy {
@@ -81,9 +134,9 @@ impl Default for HtmlPolicy {
                 .flat_map(Host::parse)
                 .map(PolicyHost)
                 .collect(),
-            event_handlers: RuleWithReplace::new("".to_owned(), LogLevel::Info),
-            dangerous_domain: RuleWithReplace::new("#".to_owned(), LogLevel::Error),
-            dangerous_uris: RuleWithReplace::new("#".to_owned(), LogLevel::Info),
+            event_handlers: RuleWithReplace::with_default(LogLevel::Info),
+            dangerous_domain: RuleWithReplace::with_default(LogLevel::Error),
+            dangerous_uris: RuleWithReplace::with_default(LogLevel::Info),
         }
     }
 }
@@ -95,7 +148,7 @@ pub struct UrlsPolicy {
     /// Ignores prefix labels (e.g. `youtube.com` matches `www.youtube.com`)
     pub dangerous_domains: Vec<PolicyHost>,
     /// Action to perform when a non-latin url is encountered
-    pub idn: LogLevel,
+    pub idn: RuleWithReplace<AttributeUrl>,
 }
 
 impl Default for UrlsPolicy {
@@ -106,7 +159,7 @@ impl Default for UrlsPolicy {
                 .flat_map(Host::parse)
                 .map(PolicyHost)
                 .collect(),
-            idn: LogLevel::Warn,
+            idn: RuleWithReplace::with_default(LogLevel::Warn),
         }
     }
 }
@@ -121,6 +174,7 @@ pub struct ResourcesPolicy {
     pub mismatched_mime: LogLevel,
     pub unknown_resource: LogLevel,
     pub pdf_active_content: LogLevel,
+    pub dangerous_js: RuleWithReplace<JsReplace>,
 }
 
 impl Default for ResourcesPolicy {
@@ -133,6 +187,7 @@ impl Default for ResourcesPolicy {
             mismatched_mime: LogLevel::Error,
             unknown_resource: LogLevel::Error,
             pdf_active_content: LogLevel::Error,
+            dangerous_js: RuleWithReplace::with_default(LogLevel::Error),
         }
     }
 }

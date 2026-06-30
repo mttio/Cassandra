@@ -1,3 +1,4 @@
+use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -5,38 +6,62 @@ use crate::{
     log::{LogLevel, LoggerTrait},
 };
 
+#[nutype(
+    derive(Debug, Deref, Serialize, Deserialize, Default),
+    default = "/* Blocked by Web Sanitizer: dangerous keywords found */"
+)]
+pub struct JsReplace(String);
+
 /// A rule that can replace undesired values
 ///
 /// Can be specified in the config in different ways:
 /// ```toml
-/// rule = "level" # only log level, uses default value as replacement
-/// rule = [value, "level"] # both replacement value and log level
-/// rule = { value = ..., level = ... } # both replacement value and log level
+/// rule = "level"                          # only log level, replaces with default value
+/// rule = true                             # same as "warn"
+/// rule = false                            # doesn't replace, log level is "warn"
+/// rule = value                            # replacement value, log level is "warn"
+/// rule = { replace = ..., level = ... }   # both replacement value and log level
+/// rule = { replace = true, level = ... }  # replaces with default value
+/// rule = { replace = false, level = ... } # doesn't replace
 /// ```
 #[derive(Clone, Debug, Serialize)]
 pub struct RuleWithReplace<R: Default> {
-    replace: R,
+    /// What to replace the undesired value with. If `None`, it is not replaced
+    replace: Option<R>,
+    /// The log level associated with this rule. If `Error`, the sanitization should stop
     level: LogLevel,
 }
 
 impl<R: Default> RuleWithReplace<R> {
-    pub fn new(replace: R, level: LogLevel) -> Self {
-        Self { replace, level }
+    pub fn new(replace: impl Into<R>, level: LogLevel) -> Self {
+        Self {
+            replace: Some(replace.into()),
+            level,
+        }
     }
 
-    pub fn is_ignore(&self) -> bool {
-        self.level.is_ignore()
+    pub fn keep(level: LogLevel) -> Self {
+        Self {
+            replace: None,
+            level,
+        }
     }
 
+    pub fn with_default(level: LogLevel) -> Self {
+        Self::new(R::default(), level)
+    }
+
+    /// Returns `Err` if `self.level == Error`
+    /// Otherwise logs the message, calls `replace` with the contained value and return `Ok`
     pub fn handle<T, F: FnOnce(&R) -> T, M: Into<SanitizerError>>(
         &self,
         logger: &impl LoggerTrait,
         replace: F,
         message: M,
-    ) -> Result<T, M> {
+    ) -> Result<Option<T>, M> {
         self.level
             .handle(logger, message)
-            .map(|_| replace(&self.replace))
+            .map(|_| self.replace.as_ref().map(replace))
     }
 }
 
@@ -48,21 +73,31 @@ impl<'de, R: Default + Deserialize<'de>> Deserialize<'de> for RuleWithReplace<R>
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Inner<R> {
-            Simple(LogLevel),
-            OnlyReplace { replace: R },
-            WithLevel { replace: R, level: LogLevel },
+            Level(LogLevel),
+            Bool(bool),
+            Value { replace: R },
+            ValueLevel { replace: R, level: LogLevel },
+            BoolLevel { replace: bool, level: LogLevel },
         }
 
         Ok(match Inner::deserialize(deserializer)? {
-            Inner::Simple(level) => Self {
-                replace: R::default(),
+            Inner::Level(level) => Self {
+                replace: Some(R::default()),
                 level,
             },
-            Inner::OnlyReplace { replace } => Self {
+            Inner::Bool(replace) => Self {
+                replace: replace.then(R::default),
+                level: LogLevel::Warn,
+            },
+            Inner::Value { replace } => Self {
                 replace,
                 level: LogLevel::Warn,
             },
-            Inner::WithLevel { replace, level } => Self { replace, level },
+            Inner::ValueLevel { replace, level } => Self { replace, level },
+            Inner::BoolLevel { replace, level } => Self {
+                replace: replace.then(R::default),
+                level,
+            },
         })
     }
 }
