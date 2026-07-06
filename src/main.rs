@@ -4,11 +4,11 @@ local HTML/asset files, a directory tree, or a list of URLs to fetch
 */
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use colored::Colorize;
 use std::fs::{self};
 use web_sanitizer_sysprog::engine_structs::InputSource;
-use web_sanitizer_sysprog::log::logging_thread;
+use web_sanitizer_sysprog::log::{LogLevel, logging_thread};
 use web_sanitizer_sysprog::policy::Policy;
 
 use std::path::PathBuf;
@@ -16,13 +16,13 @@ use std::sync::Arc;
 use url::Url;
 use walkdir::WalkDir;
 
+const DEFAULT_POLICY: &str = include_str!("../policies/default.toml");
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     if args.generate_policy {
-        let string = toml::to_string_pretty(&Policy::default())
-            .context("Failed to serialize default policy")?;
-        println!("{string}");
+        println!("{DEFAULT_POLICY}");
         return Ok(());
     };
 
@@ -102,9 +102,9 @@ pub struct Args {
     #[arg(short, long, default_value_t = 4)]
     pub workers: usize,
 
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
+    /// Verbose output. Specify multiple times to increase verbosity
+    #[arg(short, long, action = ArgAction::Count)]
+    pub verbose: u8,
 
     /// Print the default policy
     #[arg(short, long)]
@@ -181,6 +181,13 @@ fn parse_inputs(inputs: Vec<String>) -> Result<Vec<InputSource>> {
 /// * `Result<bool>` - `Ok(true)` if clean/no blocklist errors, `Ok(false)` if blocked/denied content occurred, or an error if initialization fails.
 pub fn run(args: Args) -> Result<bool> {
     let policy = load_policy(args.policy.as_ref())?;
+    let logging_level = match args.verbose {
+        0 => LogLevel::Error,
+        1 => LogLevel::Warn,
+        2 => LogLevel::Info,
+        3 => LogLevel::Debug,
+        _ => LogLevel::Trace,
+    };
 
     // Print argument summary
     println!(
@@ -256,7 +263,8 @@ pub fn run(args: Args) -> Result<bool> {
 
     match library_result {
         Ok(_) => {
-            let has_errors = logging_thread(&output_dir, &policy, max_size, rx);
+            let has_errors =
+                logging_thread(&output_dir, logging_level, LogLevel::Error, max_size, rx);
             if has_errors {
                 println!("\n{}", "[-] Execution complete with policy blocks/errors. Checked files have been processed.".red().bold());
                 Ok(false)
@@ -291,7 +299,7 @@ mod tests {
         assert_eq!(args.policy, None);
         assert_eq!(args.output_dir, PathBuf::from("output"));
         assert_eq!(args.workers, 4);
-        assert!(!args.verbose);
+        assert_eq!(args.verbose, 0);
     }
 
     #[test]
@@ -322,12 +330,20 @@ mod tests {
         assert_eq!(args.policy, Some(PathBuf::from("custom_policy.json")));
         assert_eq!(args.output_dir, PathBuf::from("custom_output"));
         assert_eq!(args.workers, 8);
-        assert!(args.verbose);
+        assert_eq!(args.verbose, 1);
     }
 
     #[test]
     fn test_missing_input_fails() {
         let result = Args::try_parse_from(["test"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_include_default_policy() {
+        let included: Policy = toml::from_str(DEFAULT_POLICY).unwrap();
+        let default = Policy::default();
+
+        assert_eq!(included, default);
     }
 }

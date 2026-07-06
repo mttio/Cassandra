@@ -1,6 +1,12 @@
+use std::ops::Deref;
+
 use url::Url;
 
-use crate::{errors::SanitizerError, log::Log, rules::RuleWithReplace};
+use crate::{
+    errors::SanitizerError,
+    log::Log,
+    rules::{CssUrl, RuleWithReplace},
+};
 
 /// Scans CSS content for @import and url(...) references, validates/rewrites them, and extracts them.
 ///
@@ -16,7 +22,7 @@ pub fn sanitize(
     css: &str,
     base_url: &Url,
     logger: &impl Log,
-    rule: &RuleWithReplace<String>,
+    rule: &RuleWithReplace<CssUrl>,
 ) -> Result<(String, Vec<(Url, String)>), SanitizerError> {
     let mut output = String::new();
     let mut extracted = Vec::new();
@@ -123,7 +129,7 @@ pub fn sanitize(
                 if let Some(replace) =
                     rule.handle(logger, SanitizerError::DangerousCssConstruct(url_clean))?
                 {
-                    output.push_str(&format!("url(\"{replace}\")"));
+                    output.push_str(&format!("url(\"{}\")", replace.deref()));
                 } else {
                     output.push_str(&format!("url({url})"));
                 }

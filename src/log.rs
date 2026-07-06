@@ -10,7 +10,6 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::SanitizerMessage;
-use crate::policy::Policy;
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -126,7 +125,8 @@ impl Log for NullLogger {
 
 pub fn logging_thread(
     output: &Path,
-    policy: &Policy,
+    console_level: LogLevel,
+    file_level: LogLevel,
     max_size: usize,
     channel: Receiver<LoggerMessage>,
 ) -> bool {
@@ -143,7 +143,7 @@ pub fn logging_thread(
         }
         let error = msg.message.to_string();
 
-        if msg.level >= policy.logging.console {
+        if msg.level >= console_level {
             println!(
                 "[{}] {}: {}",
                 format!("{:width$}", msg.source).bold().bright_blue(),
@@ -159,7 +159,7 @@ pub fn logging_thread(
             );
         }
 
-        if msg.level >= policy.logging.files
+        if msg.level >= file_level
             && let Some(Some(file)) = files.get_mut(msg.source)
         {
             let now = Local::now().naive_local();

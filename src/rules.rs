@@ -7,7 +7,7 @@ use crate::{
 };
 
 #[nutype(
-    derive(Debug, Deref, Serialize, Deserialize, Default),
+    derive(Debug, Deref, Serialize, Deserialize, Default, PartialEq),
     default = "/* Blocked by Web Sanitizer: dangerous keywords found */"
 )]
 pub struct JsReplace(String);
@@ -24,13 +24,19 @@ pub struct JsReplace(String);
 /// rule = { replace = true, level = ... }  # replaces with default value
 /// rule = { replace = false, level = ... } # doesn't replace
 /// ```
-#[derive(Clone, Debug, Serialize)]
-pub struct RuleWithReplace<R: Default> {
+#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+pub struct RuleWithReplace<R> {
     /// What to replace the undesired value with. If `None`, it is not replaced
     replace: Option<R>,
     /// The log level associated with this rule. If `Error`, the sanitization should stop
     level: LogLevel,
 }
+
+#[nutype(
+    derive(Debug, Deref, Serialize, Deserialize, Default, PartialEq),
+    default = ""
+)]
+pub struct CssUrl(String);
 
 impl<R: Default> RuleWithReplace<R> {
     pub fn new(replace: impl Into<R>, level: LogLevel) -> Self {
@@ -114,7 +120,7 @@ impl<'de, R: Default + Deserialize<'de>> Deserialize<'de> for RuleWithReplace<R>
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize)]
+#[derive(Copy, Clone, Debug, Serialize, PartialEq)]
 pub struct RuleWithValue<T: 'static> {
     pub value: T,
     pub level: LogLevel,

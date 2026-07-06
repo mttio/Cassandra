@@ -6,7 +6,7 @@ use url::Host;
 
 use crate::{
     log::LogLevel,
-    rules::{JsReplace, RuleWithReplace, RuleWithValue},
+    rules::{CssUrl, JsReplace, RuleWithReplace, RuleWithValue},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -33,27 +33,9 @@ impl Serialize for PolicyHost {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Logging {
-    /// Minimum log level to write on log files
-    pub files: LogLevel,
-    /// Minimum log level to write on the console
-    pub console: LogLevel,
-}
-
-impl Default for Logging {
-    fn default() -> Self {
-        Self {
-            files: LogLevel::Trace,
-            console: LogLevel::Warn,
-        }
-    }
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct Policy {
-    pub logging: Logging,
     pub html: HtmlPolicy,
     pub urls: UrlsPolicy,
     pub resources: ResourcesPolicy,
@@ -67,7 +49,7 @@ fn sanitize_attribute(s: String) -> String {
 /// Newtype to remove invalid characters in HTML attributes.
 /// Removes the attribute if empty.
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize),
+    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
     sanitize(with = sanitize_attribute),
     default = ""
 )]
@@ -91,7 +73,7 @@ impl AttributeString {
 /// Newtype to remove invalid characters in HTML url attributes.
 /// Removes the attribute if empty.
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize),
+    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
     sanitize(with = sanitize_attribute),
     default = "#"
 )]
@@ -112,7 +94,7 @@ impl AttributeUrl {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct HtmlPolicy {
     pub allow_scripts: Vec<String>,
@@ -141,7 +123,7 @@ impl Default for HtmlPolicy {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct UrlsPolicy {
     /// List of domains considered dangerous
@@ -164,7 +146,7 @@ impl Default for UrlsPolicy {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ResourcesPolicy {
     pub fetch_sub_resources: bool,
@@ -175,7 +157,7 @@ pub struct ResourcesPolicy {
     pub unknown_resource: LogLevel,
     pub pdf_active_content: LogLevel,
     pub dangerous_js: RuleWithReplace<JsReplace>,
-    pub dangerous_css: RuleWithReplace<String>,
+    pub dangerous_css: RuleWithReplace<CssUrl>,
 }
 
 impl Default for ResourcesPolicy {
@@ -194,7 +176,7 @@ impl Default for ResourcesPolicy {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ConnectionsPolicy {
     #[serde(with = "humantime_serde")]
