@@ -28,4 +28,4 @@ max_redirects = {
   level = "error"
 }
 user_agent = "CoolBot/0.0 (https://example.org/coolbot/; coolbot@example.org) generic-library/0.0"
-dangerous_domain = "error"
+dangerous_domain = { replace = false, level = "error" }

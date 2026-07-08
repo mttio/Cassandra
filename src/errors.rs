@@ -97,8 +97,20 @@ pub enum SanitizerError {
     Request(Url, reqwest::Error),
     #[error("Dangerous construct `{0}` detected in JS")]
     DangerousJsConstruct(String),
-    #[error("Dangerous construct `{0}` detected in CSS")]
-    DangerousCssConstruct(String),
+    #[error(
+        "Dangerous construct detected in CSS: `{}`{} @ {}",
+        from.bright_yellow(),
+        match .to {
+            Some(x) => format!(" {} `{}`", "->".bright_cyan(), x.bright_yellow()),
+            None => "".to_owned(),
+        },
+        .offset.to_string().bright_magenta(),
+    )]
+    DangerousCssConstruct {
+        from: String,
+        to: Option<String>,
+        offset: usize,
+    },
     Other(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 

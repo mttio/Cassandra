@@ -9,7 +9,6 @@ use crate::policy::Policy;
 use crate::resources::mime;
 use crate::resources::strip_jpeg_metadata;
 use crate::resources::strip_png_metadata;
-use crate::url::RuleMatch;
 use crate::url::check_domain;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -137,16 +136,16 @@ impl CrawlSession {
             sanitized_css.into_bytes()
         } else if is_js {
             let js_str = String::from_utf8_lossy(&fetched.data);
-            crate::resources::javascript::sanitize(&js_str)
-                .map(|_| None)
-                .or_else(|e| {
-                    self.policy.resources.dangerous_js.handle_with(
-                        &self.logger,
-                        |x| x.as_bytes().to_vec(),
-                        e,
-                    )
-                })?
-                .unwrap_or(fetched.data)
+            if let Some(x) = self
+                .policy
+                .resources
+                .dangerous_js
+                .check(&js_str, &self.logger)?
+            {
+                x.as_bytes().to_vec()
+            } else {
+                fetched.data
+            }
         } else if is_pdf {
             if let Err(e) = crate::resources::scan_pdf_for_active_content(&fetched.data) {
                 self.policy
@@ -271,16 +270,16 @@ impl CrawlSession {
         let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
         let js_str = String::from_utf8_lossy(&data);
 
-        let to_write = crate::resources::javascript::sanitize(&js_str)
-            .map(|_| None)
-            .or_else(|e| {
-                self.policy.resources.dangerous_js.handle_with(
-                    &self.logger,
-                    |x| x.as_bytes().to_vec(),
-                    e,
-                )
-            })?
-            .unwrap_or(data);
+        let to_write = if let Some(x) = self
+            .policy
+            .resources
+            .dangerous_js
+            .check(&js_str, &self.logger)?
+        {
+            x.as_bytes().to_vec()
+        } else {
+            data
+        };
 
         fs::write(&output_path, to_write).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
 
@@ -343,20 +342,16 @@ impl CrawlSession {
             return;
         }
 
-        if let Some(host) = url.host().map(|x| x.to_owned())
-            && self
+        if let Some(host) = url.host().map(|x| x.to_owned()) {
+            if let Err(e) = self
                 .policy
-                .urls
-                .dangerous_domains
-                .iter()
-                .any(|x| host.matches(&x.0))
-            && let Err(e) = self.policy.connections.dangerous_domain.handle(
-                &self.logger,
-                SanitizerError::DangerousDomain(host.to_owned()),
-            )
-        {
-            self.logger.error(e);
-            return;
+                .connections
+                .dangerous_domain
+                .check((&host, &self.policy.urls.dangerous_domains), &self.logger)
+            {
+                self.logger.error(e);
+                return;
+            }
         }
 
         let index = self.index();
