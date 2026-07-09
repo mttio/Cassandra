@@ -9,6 +9,7 @@ use itertools::Itertools;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::InputSource;
 use crate::errors::SanitizerMessage;
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -127,10 +128,9 @@ pub fn logging_thread(
     output: &Path,
     console_level: LogLevel,
     file_level: LogLevel,
-    sources: &[crate::engine_structs::InputSource],
+    sources: &[InputSource],
     channel: Receiver<LoggerMessage>,
 ) -> bool {
-    use crate::engine_structs::InputSource;
     use crate::errors::{SanitizationEvent, SanitizationReport};
 
     let max_size = sources.len();
@@ -138,9 +138,7 @@ pub fn logging_thread(
         .map(|i| File::create(output.join(format!("{i}.log"))).ok())
         .collect_vec();
 
-    let mut reports: Vec<Vec<SanitizationEvent>> = (0..max_size)
-        .map(|_| Vec::new())
-        .collect_vec();
+    let mut reports: Vec<Vec<SanitizationEvent>> = (0..max_size).map(|_| Vec::new()).collect_vec();
 
     let width = (max_size as f64).log10().ceil() as usize;
     let mut has_errors = false;
@@ -276,8 +274,7 @@ mod tests {
 
     #[test]
     fn test_sanitization_report_generation() {
-        use crate::errors::{SanitizerError, SanitizationReport};
-        use crate::engine_structs::InputSource;
+        use crate::errors::{SanitizationReport, SanitizerError};
         use std::path::PathBuf;
 
         let err = SanitizerError::BlockedScript("evil_script()".to_owned(), 10..20);
@@ -294,7 +291,8 @@ mod tests {
             source: 0,
             level: LogLevel::Error,
             message: SanitizerMessage::Error(err),
-        }).unwrap();
+        })
+        .unwrap();
         drop(tx);
 
         let sources = vec![InputSource::File(PathBuf::from("test_input.html"))];

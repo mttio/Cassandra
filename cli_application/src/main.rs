@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use clap::{ArgAction, Parser};
 use colored::Colorize;
 use std::fs::{self};
-use web_sanitizer_sysprog::engine_structs::InputSource;
+use web_sanitizer_sysprog::InputSource;
 use web_sanitizer_sysprog::log::{LogLevel, logging_thread};
 use web_sanitizer_sysprog::policy::Policy;
 

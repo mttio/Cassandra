@@ -3,13 +3,13 @@ use std::{
     sync::{Arc, mpsc::Sender},
 };
 
+use ::url::Url;
 use futures_util::future::lazy;
 use parking_lot::Mutex;
 use tokio::runtime::Runtime;
 
 use crate::{
     crawl_session::CrawlSession,
-    engine_structs::InputSource,
     errors::SanitizerError,
     http_client::SanitizerHttpClient,
     log::{ChannelLogger, LoggerMessage},
@@ -17,7 +17,6 @@ use crate::{
 };
 
 pub mod crawl_session;
-pub mod engine_structs;
 pub mod errors;
 pub mod html;
 pub mod http_client;
@@ -26,6 +25,17 @@ pub mod policy;
 pub mod resources;
 pub mod rules;
 pub mod url;
+
+#[derive(Clone)]
+pub enum InputSource {
+    File(PathBuf),
+    Url(Url),
+}
+
+pub struct FetchedContent {
+    pub data: Vec<u8>,
+    pub content_type: Option<String>,
+}
 
 pub fn library(
     runtime: &Runtime,

@@ -1,4 +1,4 @@
-use crate::engine_structs::{FetchedContent, InputSource};
+use crate::FetchedContent;
 use crate::errors::SanitizerError;
 use crate::html::{CrawlerState, create_rewriter};
 use crate::log::{Log, LoggerMessage};
@@ -296,11 +296,7 @@ impl SanitizerHttpClient {
             data.extend_from_slice(&chunk);
         }
 
-        Ok(FetchedContent {
-            source: InputSource::Url(url.clone()),
-            data,
-            content_type,
-        })
+        Ok(FetchedContent { data, content_type })
     }
 
     /// Fetch a single HTML URL, sanitize/rewrite it, and collect discovered subresources.
