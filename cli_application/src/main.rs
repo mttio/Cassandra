@@ -16,7 +16,7 @@ use std::sync::Arc;
 use url::Url;
 use walkdir::WalkDir;
 
-const DEFAULT_POLICY: &str = include_str!("../policies/default.toml");
+const DEFAULT_POLICY: &str = include_str!("../../policies/default.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();

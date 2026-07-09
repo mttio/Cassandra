@@ -1,34 +1,9 @@
-[package]
-name = "web_sanitizer_sysprog"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-anyhow = "1.0.102"
-base64 = "0.22.1"
-chrono = "0.4.44"
-clap = { version = "4.6.1", features = ["derive"] }
-colored = "3.1.1"
-futures-util = "0.3"
-hickory-resolver = { version = "0.26.1", features = ["tokio"] }
-humantime-serde = "1.1.1"
-itertools = "0.14.0"
-lol_html = "2.9.0"
-nutype = { version = "0.7.0", features = ["serde"] }
-parking_lot = "0.12.5"
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0"
-sha2 = "0.10.8"
-strip-ansi-escapes = "0.2.1"
-thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["full"] }
-toml = "1.1.2"
-tracing = "0.1.44"
-tracing-subscriber = "0.3.23"
-unicode-normalization = "0.1.24"
-url = { version = "2.5.8", features = ["serde"] }
-walkdir = "2.5.0"
+[workspace]
+members = [
+    "sanitizer_engine",
+    "cli_application",
+]
+resolver = "2"
 
 [patch.crates-io]
 form_urlencoded = { git = "https://github.com/psyvern/rust-url.git" }

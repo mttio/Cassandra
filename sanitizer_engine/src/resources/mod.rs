@@ -364,16 +364,16 @@ mod tests {
         assert!(scan_pdf_for_active_content(fake_stream).is_err());
 
         // Files on disk
-        let clean_file_data = std::fs::read("input_test_files/benign/clean_doc.pdf").unwrap();
+        let clean_file_data = std::fs::read("../input_test_files/benign/clean_doc.pdf").unwrap();
         assert!(scan_pdf_for_active_content(&clean_file_data).is_ok());
 
         let malicious_file_data =
-            std::fs::read("input_test_files/malicious/pdf_js_bomb.pdf").unwrap();
+            std::fs::read("../input_test_files/malicious/pdf_js_bomb.pdf").unwrap();
         assert!(scan_pdf_for_active_content(&malicious_file_data).is_err());
 
         // CSS and JS disk file validation checks
         let css_file_data =
-            std::fs::read_to_string("input_test_files/malicious/dangerous_styles.css").unwrap();
+            std::fs::read_to_string("../input_test_files/malicious/dangerous_styles.css").unwrap();
         let (clean_css, _) = crate::resources::css::sanitize(
             &css_file_data,
             &Url::parse("https://localhost").unwrap(),
@@ -384,7 +384,7 @@ mod tests {
         assert!(clean_css.contains("url(\"\")"));
 
         let js_file_data =
-            std::fs::read_to_string("input_test_files/malicious/dangerous_script.js").unwrap();
+            std::fs::read_to_string("../input_test_files/malicious/dangerous_script.js").unwrap();
         assert!(javascript::sanitize(&js_file_data).is_err());
     }
 }
