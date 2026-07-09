@@ -5,6 +5,7 @@ use hickory_resolver::net::NetError;
 use lol_html::errors::RewritingError;
 use thiserror::Error;
 use url::{Host, Url};
+use serde::{Deserialize, Serialize};
 
 /// An error that the sanitizer can produce
 #[derive(Debug, Error)]
@@ -172,4 +173,125 @@ impl From<RewritingError> for SanitizerError {
             RewritingError::ParsingAmbiguity(e) => Self::Other(Box::new(e)),
         }
     }
+}
+
+impl SanitizerError {
+    pub fn to_event(&self) -> Option<SanitizationEvent> {
+        match self {
+            Self::DangerousCssConstruct { from, to, offset } => Some(SanitizationEvent {
+                rule: "dangerous_css".to_owned(),
+                tag: "style".to_owned(),
+                offset: Some(*offset..*offset + from.len()),
+                original: from.clone(),
+                replacement: to.clone(),
+            }),
+            Self::BlockedScript(source, location) => Some(SanitizationEvent {
+                rule: "allow_scripts".to_owned(),
+                tag: "script".to_owned(),
+                offset: Some(location.clone()),
+                original: source.clone(),
+                replacement: None,
+            }),
+            Self::BlockedOrigin(tag, source, location) => Some(SanitizationEvent {
+                rule: "allow_origins".to_owned(),
+                tag: tag.clone(),
+                offset: Some(location.clone()),
+                original: source.clone(),
+                replacement: None,
+            }),
+            Self::BlockedMetaRefresh(content, location) => Some(SanitizationEvent {
+                rule: "meta_refresh".to_owned(),
+                tag: "meta".to_owned(),
+                offset: Some(location.clone()),
+                original: content.clone(),
+                replacement: None,
+            }),
+            Self::EventHandler(name, location) => Some(SanitizationEvent {
+                rule: "event_handlers".to_owned(),
+                tag: "attribute".to_owned(),
+                offset: location.clone(),
+                original: name.clone(),
+                replacement: None,
+            }),
+            Self::DangerousUri(value, location) => Some(SanitizationEvent {
+                rule: "dangerous_uris".to_owned(),
+                tag: "attribute".to_owned(),
+                offset: location.clone(),
+                original: value.clone(),
+                replacement: None,
+            }),
+            Self::Idn(original) => Some(SanitizationEvent {
+                rule: "idn".to_owned(),
+                tag: "url".to_owned(),
+                offset: None,
+                original: original.clone(),
+                replacement: None,
+            }),
+            Self::DangerousDomain(host) => Some(SanitizationEvent {
+                rule: "dangerous_domain".to_owned(),
+                tag: "domain".to_owned(),
+                offset: None,
+                original: host.to_string(),
+                replacement: None,
+            }),
+            Self::DangerousDomainInHtml(host, location) => Some(SanitizationEvent {
+                rule: "dangerous_domain".to_owned(),
+                tag: "domain".to_owned(),
+                offset: Some(location.clone()),
+                original: host.to_string(),
+                replacement: None,
+            }),
+            Self::ActiveContent(content) => Some(SanitizationEvent {
+                rule: "active_content".to_owned(),
+                tag: "pdf".to_owned(),
+                offset: None,
+                original: content.clone(),
+                replacement: None,
+            }),
+            Self::XmlEntityDeclaration => Some(SanitizationEvent {
+                rule: "xml_entity_declaration".to_owned(),
+                tag: "xml".to_owned(),
+                offset: None,
+                original: "<!ENTITY".to_owned(),
+                replacement: None,
+            }),
+            Self::MimeMismatch(expected, actual) => Some(SanitizationEvent {
+                rule: "mime_mismatch".to_owned(),
+                tag: "header".to_owned(),
+                offset: None,
+                original: format!("expected: {:?}, actual: {:?}", expected, actual),
+                replacement: None,
+            }),
+            Self::ContentTooLong(max_size) => Some(SanitizationEvent {
+                rule: "content_too_long".to_owned(),
+                tag: "resource".to_owned(),
+                offset: None,
+                original: format!("exceeds {} bytes", max_size),
+                replacement: None,
+            }),
+            Self::TooManyRedirects(max_redirects) => Some(SanitizationEvent {
+                rule: "too_many_redirects".to_owned(),
+                tag: "connection".to_owned(),
+                offset: None,
+                original: format!("exceeds {} redirects", max_redirects),
+                replacement: None,
+            }),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct SanitizationEvent {
+    pub rule: String,
+    pub tag: String,
+    pub offset: Option<Range<usize>>,
+    pub original: String,
+    pub replacement: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct SanitizationReport {
+    pub input: String,
+    pub actions: Vec<SanitizationEvent>,
 }

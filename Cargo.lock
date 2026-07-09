@@ -2689,6 +2689,7 @@ dependencies = [
  "parking_lot",
  "reqwest",
  "serde",
+ "serde_json",
  "sha2",
  "strip-ansi-escapes",
  "thiserror",
