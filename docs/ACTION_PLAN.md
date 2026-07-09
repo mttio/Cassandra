@@ -13,14 +13,14 @@
   - Compare script sources and inline content hashes against the policy `allow_scripts` allow-list.
   - Strip or neutralize any scripts that do not match the allow-list.
 - [x] **Sanitize dangerous URIs**: Block or remove `javascript:` and `data:` URIs in element attributes (like `href` or `src`).
-- [ ] **Restrict `<iframe>` and `<object>` Origins**:
+- [x] **Restrict `<iframe>` and `<object>` Origins**:
   - Parse target origins and validate them against the `allow_origins` policy.
   - Strip or rewrite elements pointing to untrusted hosts.
-- [ ] **Meta-Refresh Redirects**: Detect and remove `<meta http-equiv="refresh" ...>` tags.
+- [x] **Meta-Refresh Redirects**: Detect and remove `<meta http-equiv="refresh" ...>` tags.
 
 ### 2. URL and Link Inspection (`sanitizer_engine/url.rs`)
-- [ ] **Broaden Extraction**: Expand URL extraction to cover forms (`<form action="...">`), resource references (`src`), and other embedded tags beyond just anchors (`a[href]`) and links (`link[href]`).
-- [ ] **Flexible Action Handling**: Integrate policies (e.g., Warn, Replace, Deny/Remove) for suspicious domains and IDN links during the HTML rewriting loop.
+- [x] **Broaden Extraction**: Expand URL extraction to cover forms (`<form action="...">`), resource references (`src`), and other embedded tags beyond just anchors (`a[href]`) and links (`link[href]`).
+- [x] **Flexible Action Handling**: Integrate policies (e.g., Warn, Replace, Deny/Remove) for suspicious domains and IDN links during the HTML rewriting loop.
 
 ### 5. Reporting Layer
 - [ ] **Structured Report Generation**:
