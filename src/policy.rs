@@ -67,7 +67,7 @@ impl Verify for IdnRule {
     }
 
     fn verify(
-        this: Option<&Self>,
+        _this: Option<&Self>,
         value: &Self::Item<'_>,
     ) -> Option<crate::errors::SanitizerError> {
         crate::url::check_domain(value).map(SanitizerError::Idn)
@@ -90,7 +90,7 @@ impl Verify for EventHandlerRule {
         self.as_ref().to_owned()
     }
 
-    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
         let name = value.name().to_lowercase();
 
         if name.starts_with("on") {
@@ -122,7 +122,7 @@ impl Verify for DangerousUriRule {
         self.as_ref().to_owned()
     }
 
-    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
         let attr_value = value.value().trim().to_lowercase();
 
         if attr_value.starts_with("javascript:") || attr_value.starts_with("data:") {

@@ -59,6 +59,21 @@ pub enum SanitizerError {
     )]
     BlockedScript(String, Range<usize>),
     #[error(
+        "blocked origin (tag = {}, source = {}) @ {}..{}",
+        .0.bright_cyan(),
+        .1.bright_cyan(),
+        .2.start.to_string().bright_magenta(),
+        .2.end.to_string().bright_magenta(),
+    )]
+    BlockedOrigin(String, String, Range<usize>),
+    #[error(
+        "blocked meta refresh (content = {}) @ {}..{}",
+        .0.bright_cyan(),
+        .1.start.to_string().bright_magenta(),
+        .1.end.to_string().bright_magenta(),
+    )]
+    BlockedMetaRefresh(String, Range<usize>),
+    #[error(
         "response body exceeds maximum size ({} bytes)",
         .0.to_string().bright_cyan(),        
     )]

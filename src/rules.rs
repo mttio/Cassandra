@@ -23,7 +23,7 @@ impl Verify for JsReplace {
         self.as_ref().to_owned()
     }
 
-    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
         crate::resources::javascript::sanitize(value)
             .err()
             .map(SanitizerError::DangerousJsConstruct)

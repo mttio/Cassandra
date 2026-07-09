@@ -254,29 +254,63 @@ pub fn create_rewriter<'a, W: Write>(
                 }
             }
             "iframe" => {
-                handle_dangerous_link(el, "src", &state.base, policy, logger)?;
+                let location = el.source_location().bytes();
+                if let Some(resolved) =
+                    handle_dangerous_link(el, "src", &state.base, policy, logger)?
+                {
+                    use crate::url::RuleMatch;
+                    let host_matched = if let Some(host) = resolved.host().map(|x| x.to_owned()) {
+                        policy.html.allow_origins.iter().any(|allowed| {
+                            host.matches(&allowed.0)
+                        })
+                    } else {
+                        false
+                    };
+
+                    if !host_matched {
+                        logger.error(SanitizerError::BlockedOrigin(
+                            "iframe".to_owned(),
+                            resolved.to_string(),
+                            location,
+                        ));
+                        el.remove();
+                        return Ok(());
+                    }
+                }
             }
             "object" => {
-                handle_dangerous_link(el, "data", &state.base, policy, logger)?;
+                let location = el.source_location().bytes();
+                if let Some(resolved) =
+                    handle_dangerous_link(el, "data", &state.base, policy, logger)?
+                {
+                    use crate::url::RuleMatch;
+                    let host_matched = if let Some(host) = resolved.host().map(|x| x.to_owned()) {
+                        policy.html.allow_origins.iter().any(|allowed| {
+                            host.matches(&allowed.0)
+                        })
+                    } else {
+                        false
+                    };
+
+                    if !host_matched {
+                        logger.error(SanitizerError::BlockedOrigin(
+                            "object".to_owned(),
+                            resolved.to_string(),
+                            location,
+                        ));
+                        el.remove();
+                        return Ok(());
+                    }
+                }
             }
             "meta" => {
                 if let Some(http_equiv) = el.get_attribute("http-equiv")
                     && http_equiv.to_lowercase() == "refresh"
-                    && let Some(content) = el.get_attribute("content")
-                    && let Some((time, url)) = content.split_once(";url=")
                 {
+                    let content = el.get_attribute("content").unwrap_or_default();
                     let location = el.source_location().bytes();
-                    handle_dangerous_link_2(url, location, &state.base, policy, logger, |x| {
-                        // SAFETY: we removed all invalid characters
-                        let _ = el.set_attribute(
-                            "content",
-                            &crate::policy::sanitize_attribute(&if x.is_empty() {
-                                time.to_owned()
-                            } else {
-                                format!("{time};url={}", x)
-                            }),
-                        );
-                    })?;
+                    logger.error(SanitizerError::BlockedMetaRefresh(content, location));
+                    el.remove();
                 }
             }
             _ => {}
@@ -616,5 +650,62 @@ mod tests {
         }
         let out_str2 = String::from_utf8(output2).unwrap();
         assert!(out_str2.contains("href=\"#\""));
+    }
+
+    #[test]
+    fn test_iframe_object_origin_filtering() {
+        let mut policy = Policy::default();
+        // policy.html.allow_origins defaults to ["trusted.com"]
+        policy.resources.fetch_sub_resources = false;
+
+        let input_html = b"<div>\
+            <iframe src=\"https://trusted.com/page.html\"></iframe>\
+            <iframe src=\"https://untrusted.com/page.html\"></iframe>\
+            <object data=\"https://trusted.com/data.bin\"></object>\
+            <object data=\"https://untrusted.com/data.bin\"></object>\
+        </div>";
+
+        let mut output = Vec::new();
+        let mut state = CrawlerState {
+            base: Url::parse("https://localhost").unwrap(),
+            subresources: Vec::new(),
+        };
+
+        let mut rewriter = create_rewriter(&NullLogger, &policy, &mut state, &mut output);
+        rewriter.write(input_html).unwrap();
+        rewriter.end().unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("src=\"https://trusted.com/page.html\""));
+        assert!(!result.contains("src=\"https://untrusted.com/page.html\""));
+        assert!(!result.contains("<iframe src=\"https://untrusted.com"));
+        assert!(result.contains("data=\"https://trusted.com/data.bin\""));
+        assert!(!result.contains("data=\"https://untrusted.com/data.bin\""));
+        assert!(!result.contains("<object data=\"https://untrusted.com"));
+    }
+
+    #[test]
+    fn test_meta_refresh_removal() {
+        let policy = Policy::default();
+        let input_html = b"<html>\
+            <head>\
+                <meta charset=\"utf-8\">\
+                <meta http-equiv=\"refresh\" content=\"5;url=https://trusted.com\">\
+            </head>\
+        </html>";
+
+        let mut output = Vec::new();
+        let mut state = CrawlerState {
+            base: Url::parse("https://localhost").unwrap(),
+            subresources: Vec::new(),
+        };
+
+        let mut rewriter = create_rewriter(&NullLogger, &policy, &mut state, &mut output);
+        rewriter.write(input_html).unwrap();
+        rewriter.end().unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("charset=\"utf-8\""));
+        assert!(!result.contains("http-equiv=\"refresh\""));
     }
 }

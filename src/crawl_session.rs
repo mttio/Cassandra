@@ -9,7 +9,7 @@ use crate::policy::Policy;
 use crate::resources::mime;
 use crate::resources::strip_jpeg_metadata;
 use crate::resources::strip_png_metadata;
-use crate::url::check_domain;
+
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs;
@@ -331,13 +331,7 @@ impl CrawlSession {
 
     /// Worker task fetching a remote HTML document, sanitizing it, and enqueuing referenced sub-resources.
     pub async fn process_url(self: Arc<Self>, url: Url) {
-        if let Some(original) = check_domain(&url)
-            && let Err(e) = self
-                .policy
-                .urls
-                .idn
-                .handle(&self.logger, SanitizerError::Idn(original))
-        {
+        if let Err(e) = self.policy.urls.idn.check(&url, &self.logger) {
             self.logger.error(e);
             return;
         }
