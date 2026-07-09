@@ -8,12 +8,7 @@ use parking_lot::Mutex;
 use std::{io::Write, ops::Range, sync::Arc};
 use url::Url;
 
-use crate::{
-    errors::SanitizerError,
-    log::Log,
-    policy::{AttributeUrl, Policy},
-    url::RuleMatch,
-};
+use crate::{errors::SanitizerError, log::Log, policy::Policy};
 
 fn handle_dangerous_link_2(
     value: &str,
@@ -21,7 +16,7 @@ fn handle_dangerous_link_2(
     base_url: &Url,
     policy: &Policy,
     logger: &impl Log,
-    mut replace: impl FnMut(&AttributeUrl),
+    mut replace: impl FnMut(&str),
 ) -> Result<Option<Url>, SanitizerError> {
     use unicode_normalization::UnicodeNormalization;
     let value = value.nfc().collect::<String>();
@@ -32,36 +27,25 @@ fn handle_dangerous_link_2(
     {
         if let Some(host) = resolved.host() {
             // Check IDN
-            if let Some(original) = crate::url::check_domain(&resolved) {
-                policy
-                    .urls
-                    .idn
-                    .handle_with(logger, &mut replace, SanitizerError::Idn(original))?;
+            if let Some(r) = policy.urls.idn.check(&resolved, logger)? {
+                replace(&r);
             }
 
             let host = host.to_owned();
 
-            let is_dangerous = policy
-                .urls
-                .dangerous_domains
-                .iter()
-                .any(|x| x.0.matches(&host));
+            if let Some(x) = policy
+                .html
+                .dangerous_domain
+                .check((&host, &policy.urls.dangerous_domains, location), logger)?
+            {
+                let new = match resolved.set_host(Some(x.as_ref())) {
+                    // If policy value is a valid host, replace the host of the old url
+                    Ok(_) => resolved.as_ref(),
+                    // Otherwise replace the whole url with the policy value
+                    Err(_) => &x,
+                };
 
-            if is_dangerous {
-                policy.html.dangerous_domain.handle_with(
-                    logger,
-                    |x| {
-                        let new = match resolved.set_host(Some(x.as_ref())) {
-                            // If policy value is a valid host, replace the host of the old url
-                            Ok(_) => &AttributeUrl::new(resolved.as_ref()),
-                            // Otherwise replace the whole url with the policy value
-                            Err(_) => x,
-                        };
-
-                        replace(new)
-                    },
-                    SanitizerError::DangerousDomainInHtml(host, location),
-                )?;
+                replace(new)
             }
         }
 
@@ -101,7 +85,7 @@ fn handle_dangerous_link(
             base_url,
             policy,
             logger,
-            |x| x.replace_attribute(attr_name, el),
+            |x| replace_attribute(&crate::policy::sanitize_attribute(x), attr_name, el),
         )?)
     } else {
         Ok(None)
@@ -113,6 +97,19 @@ pub struct CrawlerState {
     pub base: Url,
     /// The resources discovered in the document
     pub subresources: Vec<(Url, String)>,
+}
+
+fn replace_attribute(
+    value: &str,
+    name: &str,
+    element: &mut lol_html::html_content::Element<impl lol_html::HandlerTypes>,
+) {
+    if value.is_empty() {
+        element.remove_attribute(name)
+    } else {
+        // SAFETY: we removed all invalid characters
+        let _ = element.set_attribute(name, value);
+    }
 }
 
 /// Creates an `HtmlRewriter` to inspect and rewrite HTML contents.
@@ -144,39 +141,18 @@ pub fn create_rewriter<'a, W: Write>(
     handlers.push(element!("*", move |el| {
         let mut state = state_1.lock();
 
-        let event_attrs: Vec<_> = el
-            .attributes()
-            .iter()
-            .filter(|x| x.name().to_lowercase().starts_with("on"))
-            .map(|x| (x.name(), x.value_source_location()))
-            .collect();
+        let mut to_replace = Vec::new();
 
-        for (name, location) in event_attrs {
-            let location = location.unwrap_or(el.source_location()).bytes();
-            policy.html.event_handlers.handle_with(
-                logger,
-                |x| x.replace_attribute(&name, el),
-                SanitizerError::EventHandler(name.clone(), Some(location)),
-            )?;
+        for attr in el.attributes() {
+            if let Some(x) = policy.html.event_handlers.check(attr, logger)? {
+                to_replace.push((attr.name(), x));
+            } else if let Some(x) = policy.html.dangerous_uris.check(attr, logger)? {
+                to_replace.push((attr.name(), x));
+            }
         }
 
-        let dangerous_uri_attrs: Vec<_> = el
-            .attributes()
-            .iter()
-            .filter(|x| {
-                let value = x.value().trim().to_lowercase();
-                value.starts_with("javascript:") || value.starts_with("data:")
-            })
-            .map(|x| (x.name(), x.value(), x.value_source_location()))
-            .collect();
-
-        for (name, value, location) in dangerous_uri_attrs {
-            let location = location.unwrap_or(el.source_location()).bytes();
-            policy.html.dangerous_uris.handle_with(
-                logger,
-                |x| x.replace_attribute(&name, el),
-                SanitizerError::DangerousUri(value, Some(location)),
-            )?;
+        for (name, value) in to_replace {
+            replace_attribute(&value, &name, el);
         }
 
         match el.tag_name().as_str() {
@@ -294,11 +270,11 @@ pub fn create_rewriter<'a, W: Write>(
                         // SAFETY: we removed all invalid characters
                         let _ = el.set_attribute(
                             "content",
-                            &if x.as_ref().is_empty() {
+                            &crate::policy::sanitize_attribute(&if x.is_empty() {
                                 time.to_owned()
                             } else {
-                                format!("{time};url={}", x.as_ref())
-                            },
+                                format!("{time};url={}", x)
+                            }),
                         );
                     })?;
                 }
@@ -388,7 +364,7 @@ mod tests {
     use super::*;
     use crate::{
         log::{LogLevel, NullLogger},
-        policy::AttributeString,
+        policy::{DangerousUriRule, EventHandlerRule},
         rules::RuleWithReplace,
     };
 
@@ -418,7 +394,7 @@ mod tests {
     fn test_event_handler_replacement() {
         let mut policy = Policy::default();
         policy.html.event_handlers =
-            RuleWithReplace::new(AttributeString::new("alert('blocked')"), LogLevel::Info);
+            RuleWithReplace::new(EventHandlerRule::new("alert('blocked')"), LogLevel::Info);
 
         let input_html = b"<button onclick=\"alert(1)\"></button>";
         let mut output = Vec::new();
@@ -561,7 +537,8 @@ mod tests {
     #[test]
     fn test_dangerous_uris_bypass_whitespace() {
         let mut policy = Policy::default();
-        policy.html.dangerous_uris = RuleWithReplace::new(AttributeUrl::new(""), LogLevel::Info);
+        policy.html.dangerous_uris =
+            RuleWithReplace::new(DangerousUriRule::new(""), LogLevel::Info);
 
         let input_html = b"<a href=\"\n\t javascript:alert(1)\">link</a>";
         let mut output = Vec::new();

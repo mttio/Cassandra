@@ -1,12 +1,14 @@
-use std::{fmt::Debug, time::Duration};
+use std::{fmt::Debug, ops::Range, time::Duration};
 
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
-use url::Host;
+use url::{Host, Url};
 
 use crate::{
+    errors::SanitizerError,
     log::LogLevel,
-    rules::{CssUrl, JsReplace, RuleWithReplace, RuleWithValue},
+    rules::{CssUrl, JsReplace, RuleWithReplace, RuleWithValue, Verify},
+    url::RuleMatch,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -42,54 +44,93 @@ pub struct Policy {
     pub connections: ConnectionsPolicy,
 }
 
-fn sanitize_attribute(s: String) -> String {
+pub fn sanitize_attribute(s: &str) -> String {
     s.replace([' ', '\n', '\r', '\t', '\x0C', '/', '>', '='], "")
-}
-
-/// Newtype to remove invalid characters in HTML attributes.
-/// Removes the attribute if empty.
-#[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
-    sanitize(with = sanitize_attribute),
-    default = ""
-)]
-pub struct AttributeString(String);
-
-impl AttributeString {
-    pub fn replace_attribute(
-        &self,
-        name: &str,
-        element: &mut lol_html::html_content::Element<impl lol_html::HandlerTypes>,
-    ) {
-        if self.as_ref().is_empty() {
-            element.remove_attribute(name)
-        } else {
-            // SAFETY: we removed all invalid characters
-            let _ = element.set_attribute(name, self.as_ref());
-        }
-    }
 }
 
 /// Newtype to remove invalid characters in HTML url attributes.
 /// Removes the attribute if empty.
 #[nutype(
     derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
-    sanitize(with = sanitize_attribute),
+    sanitize(with = |x| sanitize_attribute(&x)),
     default = "#"
 )]
-pub struct AttributeUrl(String);
+pub struct IdnRule(String);
 
-impl AttributeUrl {
-    pub fn replace_attribute(
-        &self,
-        name: &str,
-        element: &mut lol_html::html_content::Element<impl lol_html::HandlerTypes>,
-    ) {
-        if self.as_ref().is_empty() {
-            element.remove_attribute(name)
+impl Verify for IdnRule {
+    type Item<'a> = &'a Url;
+
+    type Output = String;
+
+    fn to_output(&self) -> Self::Output {
+        self.as_ref().to_owned()
+    }
+
+    fn verify(
+        this: Option<&Self>,
+        value: &Self::Item<'_>,
+    ) -> Option<crate::errors::SanitizerError> {
+        crate::url::check_domain(value).map(SanitizerError::Idn)
+    }
+}
+
+#[nutype(
+    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    sanitize(with = |x| sanitize_attribute(&x)),
+    default = ""
+)]
+pub struct EventHandlerRule(String);
+
+impl Verify for EventHandlerRule {
+    type Item<'a> = &'a lol_html::html_content::Attribute<'a>;
+
+    type Output = String;
+
+    fn to_output(&self) -> Self::Output {
+        self.as_ref().to_owned()
+    }
+
+    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+        let name = value.name().to_lowercase();
+
+        if name.starts_with("on") {
+            let location = value
+                .value_source_location()
+                .or_else(|| value.name_source_location())
+                .map(|x| x.bytes());
+
+            Some(SanitizerError::EventHandler(name, location))
         } else {
-            // SAFETY: we removed all invalid characters
-            let _ = element.set_attribute(name, self.as_ref());
+            None
+        }
+    }
+}
+
+#[nutype(
+    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    sanitize(with = |x| sanitize_attribute(&x)),
+    default = "#"
+)]
+pub struct DangerousUriRule(String);
+
+impl Verify for DangerousUriRule {
+    type Item<'a> = &'a lol_html::html_content::Attribute<'a>;
+
+    type Output = String;
+
+    fn to_output(&self) -> Self::Output {
+        self.as_ref().to_owned()
+    }
+
+    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+        let attr_value = value.value().trim().to_lowercase();
+
+        if attr_value.starts_with("javascript:") || attr_value.starts_with("data:") {
+            let location = value.value_source_location().map(|x| x.bytes());
+
+            Some(SanitizerError::DangerousUri(attr_value, location))
+        } else {
+            None
         }
     }
 }
@@ -100,11 +141,11 @@ pub struct HtmlPolicy {
     pub allow_scripts: Vec<String>,
     pub allow_origins: Vec<PolicyHost>,
     /// Action to perform when an event handler is encountered
-    pub event_handlers: RuleWithReplace<AttributeString>,
+    pub event_handlers: RuleWithReplace<EventHandlerRule>,
     /// Action to perform when a dangerous domain is encountered
-    pub dangerous_domain: RuleWithReplace<AttributeUrl>,
+    pub dangerous_domain: RuleWithReplace<DangerousDomain2>,
     /// Action to perform when a dangerous URI (javascript:, data:) is encountered
-    pub dangerous_uris: RuleWithReplace<AttributeUrl>,
+    pub dangerous_uris: RuleWithReplace<DangerousUriRule>,
 }
 
 impl Default for HtmlPolicy {
@@ -130,7 +171,7 @@ pub struct UrlsPolicy {
     /// Ignores prefix labels (e.g. `youtube.com` matches `www.youtube.com`)
     pub dangerous_domains: Vec<PolicyHost>,
     /// Action to perform when a non-latin url is encountered
-    pub idn: RuleWithReplace<AttributeUrl>,
+    pub idn: RuleWithReplace<IdnRule>,
 }
 
 impl Default for UrlsPolicy {
@@ -176,6 +217,56 @@ impl Default for ResourcesPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
+pub struct DangerousDomain;
+
+impl Verify for DangerousDomain {
+    type Item<'a> = (&'a Host, &'a [PolicyHost]);
+
+    type Output = ();
+
+    fn to_output(&self) -> Self::Output {}
+
+    fn verify(_: Option<&Self>, &(host, domains): &Self::Item<'_>) -> Option<SanitizerError> {
+        if domains.iter().any(|x| host.matches(&x.0)) {
+            Some(SanitizerError::DangerousDomain(host.to_owned()))
+        } else {
+            None
+        }
+    }
+}
+
+#[nutype(
+    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    sanitize(with = |x| sanitize_attribute(&x)),
+    default = "#"
+)]
+pub struct DangerousDomain2(String);
+
+impl Verify for DangerousDomain2 {
+    type Item<'a> = (&'a Host, &'a [PolicyHost], Range<usize>);
+
+    type Output = String;
+
+    fn to_output(&self) -> Self::Output {
+        self.as_ref().to_owned()
+    }
+
+    fn verify(
+        _: Option<&Self>,
+        &(host, domains, ref location): &Self::Item<'_>,
+    ) -> Option<SanitizerError> {
+        if domains.iter().any(|x| host.matches(&x.0)) {
+            Some(SanitizerError::DangerousDomainInHtml(
+                host.to_owned(),
+                location.clone(),
+            ))
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ConnectionsPolicy {
@@ -188,7 +279,7 @@ pub struct ConnectionsPolicy {
     /// User agent to include in every request
     pub user_agent: String,
     /// Action to perform when connecting to a dangerous domain
-    pub dangerous_domain: LogLevel,
+    pub dangerous_domain: RuleWithReplace<DangerousDomain>,
 }
 
 impl Default for ConnectionsPolicy {
@@ -198,7 +289,7 @@ impl Default for ConnectionsPolicy {
             overall_timeout: Duration::from_secs(15),
             max_redirects: RuleWithValue::new(2, LogLevel::Error),
             user_agent: "CoolBot/0.0 (https://example.org/coolbot/; coolbot@example.org) generic-library/0.0".to_owned(),
-            dangerous_domain: LogLevel::Error,
+            dangerous_domain: RuleWithReplace::keep(LogLevel::Error),
         }
     }
 }

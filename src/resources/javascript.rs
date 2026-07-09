@@ -1,7 +1,5 @@
 use itertools::Itertools;
 
-use crate::errors::SanitizerError;
-
 /// Scans JS file for dangerous constructs (eval, document.write).
 ///
 /// # Inputs
@@ -9,7 +7,7 @@ use crate::errors::SanitizerError;
 ///
 /// # Returns
 /// * `Result<(), SanitizationError>` - `Ok` if no dangerous keywords are found, otherwise an `Err` indicating what was found.
-pub fn sanitize(content: &str) -> Result<(), SanitizerError> {
+pub fn sanitize(content: &str) -> Result<(), String> {
     let mut chars = content.chars().peekable();
     while let Some(c) = chars.next() {
         if c == 'e' {
@@ -23,7 +21,7 @@ pub fn sanitize(content: &str) -> Result<(), SanitizerError> {
                     }
                 }
                 if temp.peek() == Some(&'(') {
-                    return Err(SanitizerError::DangerousJsConstruct("eval(...)".to_owned()));
+                    return Err("eval(...)".to_owned());
                 }
             }
         }
@@ -34,9 +32,7 @@ pub fn sanitize(content: &str) -> Result<(), SanitizerError> {
                 if temp.next() == Some('.') {
                     let mut temp = temp.skip_while(|c| c.is_whitespace());
                     if temp.next_array() == Some(['w', 'r', 'i', 't', 'e']) {
-                        return Err(SanitizerError::DangerousJsConstruct(
-                            "document.write(...)".to_owned(),
-                        ));
+                        return Err("document.write(...)".to_owned());
                     }
                 }
             }

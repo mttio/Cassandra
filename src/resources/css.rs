@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use url::Url;
 
 use crate::{
@@ -121,18 +119,13 @@ pub fn sanitize(
         // Match url(
         if i + 4 <= chars.len() && chars[i..i + 4] == ['u', 'r', 'l', '('] {
             i += 4;
+            let offset = i;
 
             let url = read_url_string(&chars, &mut i, ')');
 
             let url_clean = url.trim().to_string();
-            if url_clean.starts_with("data:") || url_clean.starts_with("javascript:") {
-                if let Some(replace) =
-                    rule.handle(logger, SanitizerError::DangerousCssConstruct(url_clean))?
-                {
-                    output.push_str(&format!("url(\"{}\")", replace.deref()));
-                } else {
-                    output.push_str(&format!("url({url})"));
-                }
+            if let Some(replace) = rule.check((&url_clean, offset), logger)? {
+                output.push_str(&format!("url(\"{replace}\")"));
             } else if let Ok(resolved_url) = base_url.join(&url_clean) {
                 let ext = url_clean
                     .rsplit('.')

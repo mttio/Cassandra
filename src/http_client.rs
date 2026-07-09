@@ -3,7 +3,6 @@ use crate::errors::SanitizerError;
 use crate::html::{CrawlerState, create_rewriter};
 use crate::log::{Log, LoggerMessage};
 use crate::policy::Policy;
-use crate::url::{RuleMatch, check_domain};
 use std::path::Path;
 
 use futures_util::StreamExt;
@@ -186,12 +185,7 @@ impl SanitizerHttpClient {
                 let logger = (index, &channel);
 
                 let check = || -> Result<(), SanitizerError> {
-                    if let Some(original) = check_domain(attempt.url()) {
-                        policy
-                            .urls
-                            .idn
-                            .handle(&logger, SanitizerError::Idn(original))?;
-                    }
+                    policy.urls.idn.check(attempt.url(), &logger)?;
 
                     let max_redirects = policy.connections.max_redirects;
                     if attempt.previous().len() == max_redirects.value + 1 {
@@ -201,15 +195,9 @@ impl SanitizerHttpClient {
                         )?;
                     }
 
-                    if let Some(host) = attempt.url().host().map(|x| x.to_owned())
-                        && policy
-                            .urls
-                            .dangerous_domains
-                            .iter()
-                            .any(|x| host.matches(&x.0))
-                    {
+                    if let Some(host) = attempt.url().host().map(|x| x.to_owned()) {
                         dangerous_domain_action
-                            .handle(&logger, SanitizerError::DangerousDomain(host.to_owned()))?;
+                            .check((&host, &policy.urls.dangerous_domains), &logger)?;
                     }
 
                     Ok(())

@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
@@ -7,10 +9,26 @@ use crate::{
 };
 
 #[nutype(
-    derive(Debug, Deref, Serialize, Deserialize, Default, PartialEq),
+    derive(Debug, AsRef, Deref, Serialize, Deserialize, Default, PartialEq),
     default = "/* Blocked by Web Sanitizer: dangerous keywords found */"
 )]
 pub struct JsReplace(String);
+
+impl Verify for JsReplace {
+    type Item<'a> = &'a str;
+
+    type Output = String;
+
+    fn to_output(&self) -> Self::Output {
+        self.as_ref().to_owned()
+    }
+
+    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+        crate::resources::javascript::sanitize(value)
+            .err()
+            .map(SanitizerError::DangerousJsConstruct)
+    }
+}
 
 /// A rule that can replace undesired values
 ///
@@ -32,11 +50,44 @@ pub struct RuleWithReplace<R> {
     level: LogLevel,
 }
 
+pub trait Verify {
+    type Item<'a>
+    where
+        Self: 'a;
+    type Output;
+
+    fn to_output(&self) -> Self::Output;
+
+    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError>;
+}
+
 #[nutype(
     derive(Debug, Deref, Serialize, Deserialize, Default, PartialEq),
     default = ""
 )]
 pub struct CssUrl(String);
+
+impl Verify for CssUrl {
+    type Item<'a> = (&'a str, usize);
+    type Output = String;
+
+    fn to_output(&self) -> Self::Output {
+        self.deref().to_owned()
+    }
+
+    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+        let &(url, offset) = value;
+        if url.starts_with("data:") || url.starts_with("javascript:") {
+            Some(SanitizerError::DangerousCssConstruct {
+                from: url.to_owned(),
+                to: this.map(|x| x.deref().to_owned()),
+                offset,
+            })
+        } else {
+            None
+        }
+    }
+}
 
 impl<R: Default> RuleWithReplace<R> {
     pub fn new(replace: impl Into<R>, level: LogLevel) -> Self {
@@ -80,6 +131,22 @@ impl<R: Default> RuleWithReplace<R> {
         self.level
             .handle(logger, message)
             .map(|_| self.replace.as_ref())
+    }
+}
+
+impl<R: Default + Verify> RuleWithReplace<R> {
+    pub fn check(
+        &self,
+        value: R::Item<'_>,
+        logger: &impl Log,
+    ) -> Result<Option<R::Output>, SanitizerError> {
+        match R::verify(self.replace.as_ref(), &value) {
+            None => Ok(None),
+            Some(e) => self
+                .level
+                .handle(logger, e)
+                .map(|_| self.replace.as_ref().map(R::to_output)),
+        }
     }
 }
 
