@@ -1,5 +1,5 @@
 use crate::FetchedContent;
-use crate::errors::SanitizerError;
+use crate::errors::{RuleError, SanitizerError};
 use crate::html::{CrawlerState, create_rewriter};
 use crate::log::{Log, LoggerMessage};
 use crate::policy::Policy;
@@ -189,10 +189,8 @@ impl SanitizerHttpClient {
 
                     let max_redirects = policy.connections.max_redirects;
                     if attempt.previous().len() == max_redirects.value + 1 {
-                        max_redirects.handle(
-                            &logger,
-                            SanitizerError::TooManyRedirects(max_redirects.value),
-                        )?;
+                        max_redirects
+                            .handle(&logger, RuleError::TooManyRedirects(max_redirects.value))?;
                     }
 
                     if let Some(host) = attempt.url().host().map(|x| x.to_owned()) {
@@ -256,7 +254,7 @@ impl SanitizerHttpClient {
             .and_then(|x| x.parse::<usize>().ok())
             && length > remaining_bytes
         {
-            return Err(SanitizerError::ContentTooLong(remaining_bytes));
+            return Err(RuleError::ContentTooLong(remaining_bytes).into());
         }
 
         let content_type = response
@@ -288,10 +286,10 @@ impl SanitizerHttpClient {
             let chunk = item.map_err(SanitizerError::Streaming)?;
             length += chunk.len();
             if length > remaining_bytes {
-                return Err(SanitizerError::ContentTooLong(remaining_bytes));
+                return Err(RuleError::ContentTooLong(remaining_bytes).into());
             }
             if is_xml_html_svg && entity_scanner.feed_chunk(&chunk) {
-                return Err(SanitizerError::XmlEntityDeclaration);
+                return Err(RuleError::XmlEntityDeclaration.into());
             }
             data.extend_from_slice(&chunk);
         }
@@ -338,8 +336,8 @@ impl SanitizerHttpClient {
             .and_then(|x| x.parse::<usize>().ok())
             && length > max_bytes.value
         {
-            let _ = max_bytes.handle(logger, SanitizerError::ContentTooLong(max_bytes.value));
-            return Err(SanitizerError::ContentTooLong(max_bytes.value));
+            let _ = max_bytes.handle(logger, RuleError::ContentTooLong(max_bytes.value));
+            return Err(RuleError::ContentTooLong(max_bytes.value).into());
         }
 
         let content_type = response
@@ -351,10 +349,9 @@ impl SanitizerHttpClient {
         if let Some(content_type) = content_type
             && !content_type.contains("text/html")
         {
-            return Err(SanitizerError::MimeMismatch(
-                Some("text/html".to_owned()),
-                Some(content_type),
-            ));
+            return Err(
+                RuleError::MimeMismatch(Some("text/html".to_owned()), Some(content_type)).into(),
+            );
         }
 
         let mut stream = response.bytes_stream();
@@ -381,14 +378,14 @@ impl SanitizerHttpClient {
             if total_bytes > max_bytes.value {
                 drop(rewriter);
                 let _ = std::fs::remove_file(output_path);
-                let _ = max_bytes.handle(logger, SanitizerError::ContentTooLong(max_bytes.value));
-                return Err(SanitizerError::ContentTooLong(max_bytes.value));
+                let _ = max_bytes.handle(logger, RuleError::ContentTooLong(max_bytes.value));
+                return Err(RuleError::ContentTooLong(max_bytes.value).into());
             }
 
             if entity_scanner.feed_chunk(&chunk) {
                 drop(rewriter);
                 let _ = std::fs::remove_file(output_path);
-                return Err(SanitizerError::XmlEntityDeclaration);
+                return Err(RuleError::XmlEntityDeclaration.into());
             }
 
             rewriter.write(&chunk)?;

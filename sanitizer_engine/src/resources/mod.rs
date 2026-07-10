@@ -2,7 +2,7 @@ pub mod css;
 pub mod javascript;
 pub mod mime;
 
-use crate::errors::SanitizerError;
+use crate::errors::{RuleError, SanitizerError};
 use url::Url;
 
 /// Helper to generate a unique local filename deterministic for a URL.
@@ -172,29 +172,27 @@ pub fn scan_pdf_for_active_content(data: &[u8]) -> Result<(), SanitizerError> {
             if i + 3 <= data.len() && &data[i..i + 3] == b"/JS" {
                 let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent(
-                        "JavaScript (/JS)".to_string(),
-                    ));
+                    return Err(RuleError::ActiveContent("JavaScript (/JS)".to_string()).into());
                 }
             }
             if i + 11 <= data.len() && &data[i..i + 11] == b"/JavaScript" {
                 let next_char = if i + 11 < data.len() { data[i + 11] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent("JavaScript".to_string()));
+                    return Err(RuleError::ActiveContent("JavaScript".to_string()).into());
                 }
             }
             if i + 3 <= data.len() && &data[i..i + 3] == b"/AA" {
                 let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent(
-                        "Additional Action (/AA)".to_string(),
-                    ));
+                    return Err(
+                        RuleError::ActiveContent("Additional Action (/AA)".to_string()).into(),
+                    );
                 }
             }
             if i + 11 <= data.len() && &data[i..i + 11] == b"/OpenAction" {
                 let next_char = if i + 11 < data.len() { data[i + 11] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent("OpenAction".to_string()));
+                    return Err(RuleError::ActiveContent("OpenAction".to_string()).into());
                 }
             }
         }

@@ -52,21 +52,18 @@ pub fn check_domain(url: &Url) -> Option<String> {
     }
 }
 
-pub trait RuleMatch: std::marker::Sized {
-    type RuleType;
-    fn matches(&self, rule: &Self::RuleType) -> bool;
-}
+/// Checks if a given host matches a host specified in the policy
+pub fn host_matches(host: &Host, target: &Host) -> bool {
+    match (host, target) {
+        (Host::Domain(host, _), Host::Domain(target, _)) => {
+            let Some(prefix) = host.strip_suffix(target) else {
+                return false;
+            };
 
-impl RuleMatch for Host {
-    type RuleType = Self;
-
-    fn matches(&self, rule: &Self::RuleType) -> bool {
-        // TODO: avoid calling `to_string` every time
-        let target = self.to_string();
-        let Some(prefix) = target.strip_suffix(&rule.to_string()) else {
-            return false;
-        };
-
-        prefix.is_empty() || prefix.ends_with('.')
+            prefix.is_empty() || prefix.ends_with('.')
+        }
+        (Host::Ipv4(a), Host::Ipv4(b)) => a == b,
+        (Host::Ipv6(a), Host::Ipv6(b)) => a == b,
+        _ => false,
     }
 }

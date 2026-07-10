@@ -8,7 +8,12 @@ use parking_lot::Mutex;
 use std::{io::Write, ops::Range, sync::Arc};
 use url::Url;
 
-use crate::{errors::SanitizerError, log::Log, policy::Policy};
+use crate::{
+    errors::{RuleError, SanitizerError},
+    log::Log,
+    policy::Policy,
+    url::host_matches,
+};
 
 fn handle_dangerous_link_2(
     value: &str,
@@ -304,7 +309,7 @@ pub fn create_rewriter<'a, W: Write>(
                     };
 
                     if !host_matched {
-                        logger.error(SanitizerError::BlockedScript(
+                        logger.error(RuleError::BlockedScript(
                             resolved.to_string(),
                             location.bytes(),
                         ));
@@ -320,7 +325,7 @@ pub fn create_rewriter<'a, W: Write>(
                     }
                 } else {
                     if let Some(src) = el.get_attribute("src") {
-                        logger.error(SanitizerError::BlockedScript(src.clone(), location.bytes()));
+                        logger.error(RuleError::BlockedScript(src.clone(), location.bytes()));
                         el.remove();
                     }
                 }
@@ -330,17 +335,18 @@ pub fn create_rewriter<'a, W: Write>(
                 if let Some(resolved) =
                     handle_dangerous_link(el, "src", &state.base, policy, logger)?
                 {
-                    use crate::url::RuleMatch;
                     let host_matched = if let Some(host) = resolved.host().map(|x| x.to_owned()) {
-                        policy.html.allow_origins.iter().any(|allowed| {
-                            host.matches(&allowed.0)
-                        })
+                        policy
+                            .html
+                            .allow_origins
+                            .iter()
+                            .any(|allowed| host_matches(&host, &allowed.0))
                     } else {
                         false
                     };
 
                     if !host_matched {
-                        logger.error(SanitizerError::BlockedOrigin(
+                        logger.error(RuleError::BlockedOrigin(
                             "iframe".to_owned(),
                             resolved.to_string(),
                             location,
@@ -355,17 +361,18 @@ pub fn create_rewriter<'a, W: Write>(
                 if let Some(resolved) =
                     handle_dangerous_link(el, "data", &state.base, policy, logger)?
                 {
-                    use crate::url::RuleMatch;
                     let host_matched = if let Some(host) = resolved.host().map(|x| x.to_owned()) {
-                        policy.html.allow_origins.iter().any(|allowed| {
-                            host.matches(&allowed.0)
-                        })
+                        policy
+                            .html
+                            .allow_origins
+                            .iter()
+                            .any(|allowed| host_matches(&host, &allowed.0))
                     } else {
                         false
                     };
 
                     if !host_matched {
-                        logger.error(SanitizerError::BlockedOrigin(
+                        logger.error(RuleError::BlockedOrigin(
                             "object".to_owned(),
                             resolved.to_string(),
                             location,
@@ -381,7 +388,7 @@ pub fn create_rewriter<'a, W: Write>(
                 {
                     let content = el.get_attribute("content").unwrap_or_default();
                     let location = el.source_location().bytes();
-                    logger.error(SanitizerError::BlockedMetaRefresh(content, location));
+                    logger.error(RuleError::BlockedMetaRefresh(content, location));
                     el.remove();
                 }
             }
@@ -422,10 +429,7 @@ pub fn create_rewriter<'a, W: Write>(
                 let start = inline_script_location.unwrap_or(0);
                 let end = t.source_location().bytes().end;
 
-                logger.error(SanitizerError::BlockedScript(
-                    "<inline>".to_owned(),
-                    start..end,
-                ));
+                logger.error(RuleError::BlockedScript("<inline>".to_owned(), start..end));
             }
             inline_script.clear();
             inline_script_location = None;

@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
 use crate::{
-    errors::SanitizerError,
+    errors::RuleError,
     log::LogLevel,
     rules::{CssUrl, JsReplace, RuleWithReplace, RuleWithValue, Verify},
-    url::RuleMatch,
+    url::host_matches,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -66,11 +66,8 @@ impl Verify for IdnRule {
         self.as_ref().to_owned()
     }
 
-    fn verify(
-        _this: Option<&Self>,
-        value: &Self::Item<'_>,
-    ) -> Option<crate::errors::SanitizerError> {
-        crate::url::check_domain(value).map(SanitizerError::Idn)
+    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<crate::errors::RuleError> {
+        crate::url::check_domain(value).map(RuleError::Idn)
     }
 }
 
@@ -90,7 +87,7 @@ impl Verify for EventHandlerRule {
         self.as_ref().to_owned()
     }
 
-    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<RuleError> {
         let name = value.name().to_lowercase();
 
         if name.starts_with("on") {
@@ -99,7 +96,7 @@ impl Verify for EventHandlerRule {
                 .or_else(|| value.name_source_location())
                 .map(|x| x.bytes());
 
-            Some(SanitizerError::EventHandler(name, location))
+            Some(RuleError::EventHandler(name, location))
         } else {
             None
         }
@@ -122,13 +119,13 @@ impl Verify for DangerousUriRule {
         self.as_ref().to_owned()
     }
 
-    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<RuleError> {
         let attr_value = value.value().trim().to_lowercase();
 
         if attr_value.starts_with("javascript:") || attr_value.starts_with("data:") {
             let location = value.value_source_location().map(|x| x.bytes());
 
-            Some(SanitizerError::DangerousUri(attr_value, location))
+            Some(RuleError::DangerousUri(attr_value, location))
         } else {
             None
         }
@@ -227,9 +224,9 @@ impl Verify for DangerousDomain {
 
     fn to_output(&self) -> Self::Output {}
 
-    fn verify(_: Option<&Self>, &(host, domains): &Self::Item<'_>) -> Option<SanitizerError> {
-        if domains.iter().any(|x| host.matches(&x.0)) {
-            Some(SanitizerError::DangerousDomain(host.to_owned()))
+    fn verify(_: Option<&Self>, &(host, domains): &Self::Item<'_>) -> Option<RuleError> {
+        if domains.iter().any(|x| host_matches(host, &x.0)) {
+            Some(RuleError::DangerousDomain(host.to_owned(), None))
         } else {
             None
         }
@@ -255,11 +252,11 @@ impl Verify for DangerousDomain2 {
     fn verify(
         _: Option<&Self>,
         &(host, domains, ref location): &Self::Item<'_>,
-    ) -> Option<SanitizerError> {
-        if domains.iter().any(|x| host.matches(&x.0)) {
-            Some(SanitizerError::DangerousDomainInHtml(
+    ) -> Option<RuleError> {
+        if domains.iter().any(|x| host_matches(host, &x.0)) {
+            Some(RuleError::DangerousDomain(
                 host.to_owned(),
-                location.clone(),
+                Some(location.clone()),
             ))
         } else {
             None

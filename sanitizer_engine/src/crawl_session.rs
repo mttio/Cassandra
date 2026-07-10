@@ -1,3 +1,4 @@
+use crate::errors::RuleError;
 use crate::errors::SanitizerError;
 use crate::errors::SanitizerMessage;
 use crate::html::CrawlerState;
@@ -69,10 +70,7 @@ impl CrawlSession {
 
         let remaining_bytes = max_bytes.value.saturating_sub(*self.total_bytes.lock());
         if remaining_bytes == 0 {
-            max_bytes.handle(
-                &self.logger,
-                SanitizerError::ContentTooLong(max_bytes.value),
-            )?;
+            max_bytes.handle(&self.logger, RuleError::ContentTooLong(max_bytes.value))?;
         }
 
         self.logger.info(SanitizerMessage::CrawlingSubresource {
@@ -94,8 +92,7 @@ impl CrawlSession {
         let declared = fetched.content_type.as_deref().map(mime::clean);
         let sniffed = mime::sniff(&fetched.data);
         if !mime::validate(declared.as_deref(), sniffed) {
-            let err =
-                SanitizerError::MimeMismatch(declared.clone(), sniffed.map(|x| x.to_string()));
+            let err = RuleError::MimeMismatch(declared.clone(), sniffed.map(|x| x.to_string()));
             self.policy
                 .resources
                 .mismatched_mime
@@ -186,7 +183,7 @@ impl CrawlSession {
                 if *total_requests == max_requests.value + 1 {
                     self.logger.log(
                         max_requests.level,
-                        SanitizerError::MaxSubresources(max_requests.value),
+                        RuleError::MaxSubresources(max_requests.value),
                     );
                 }
 
@@ -199,7 +196,7 @@ impl CrawlSession {
         if depth > max_depth.value {
             if let Err(e) = max_depth.handle(
                 &self.logger,
-                SanitizerError::MaxSubresourceDepth(max_depth.value),
+                RuleError::MaxSubresourceDepth(max_depth.value),
             ) {
                 self.logger.error(e);
                 return;
@@ -316,7 +313,7 @@ impl CrawlSession {
             if entity_scanner.feed_chunk(&buffer[..n]) {
                 drop(rewriter);
                 let _ = std::fs::remove_file(&output_path);
-                return Err(SanitizerError::XmlEntityDeclaration);
+                return Err(RuleError::XmlEntityDeclaration.into());
             }
             rewriter.write(&buffer[..n])?;
         }

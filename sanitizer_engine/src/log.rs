@@ -131,7 +131,7 @@ pub fn logging_thread(
     sources: &[InputSource],
     channel: Receiver<LoggerMessage>,
 ) -> bool {
-    use crate::errors::{SanitizationEvent, SanitizationReport};
+    use crate::errors::{SanitizationEvent, SanitizationReport, SanitizerError, SanitizerMessage};
 
     let max_size = sources.len();
     let mut files = (0..max_size)
@@ -149,12 +149,10 @@ pub fn logging_thread(
         }
 
         // Collect sanitization action events if the message contains one
-        if let crate::errors::SanitizerMessage::Error(ref err) = msg.message {
-            if let Some(event) = err.to_event() {
-                if msg.source < max_size {
-                    reports[msg.source].push(event);
-                }
-            }
+        if let SanitizerMessage::Error(SanitizerError::Rule(ref err)) = msg.message
+            && let Some(report) = reports.get_mut(msg.source)
+        {
+            report.push(err.to_event());
         }
 
         let error = msg.message.to_string();
@@ -274,11 +272,11 @@ mod tests {
 
     #[test]
     fn test_sanitization_report_generation() {
-        use crate::errors::{SanitizationReport, SanitizerError};
+        use crate::errors::{RuleError, SanitizationReport};
         use std::path::PathBuf;
 
-        let err = SanitizerError::BlockedScript("evil_script()".to_owned(), 10..20);
-        let event = err.to_event().unwrap();
+        let err = RuleError::BlockedScript("evil_script()".to_owned(), 10..20);
+        let event = err.to_event();
         assert_eq!(event.rule, "allow_scripts");
         assert_eq!(event.original, "evil_script()");
         assert_eq!(event.offset, Some(10..20));
@@ -290,7 +288,7 @@ mod tests {
         tx.send(LoggerMessage {
             source: 0,
             level: LogLevel::Error,
-            message: SanitizerMessage::Error(err),
+            message: err.into(),
         })
         .unwrap();
         drop(tx);

@@ -4,7 +4,7 @@ use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    errors::SanitizerError,
+    errors::{RuleError, SanitizerError},
     log::{Log, LogLevel},
 };
 
@@ -23,10 +23,10 @@ impl Verify for JsReplace {
         self.as_ref().to_owned()
     }
 
-    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<RuleError> {
         crate::resources::javascript::sanitize(value)
             .err()
-            .map(SanitizerError::DangerousJsConstruct)
+            .map(RuleError::DangerousJsConstruct)
     }
 }
 
@@ -58,7 +58,7 @@ pub trait Verify {
 
     fn to_output(&self) -> Self::Output;
 
-    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError>;
+    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<RuleError>;
 }
 
 #[nutype(
@@ -75,10 +75,10 @@ impl Verify for CssUrl {
         self.deref().to_owned()
     }
 
-    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<SanitizerError> {
+    fn verify(this: Option<&Self>, value: &Self::Item<'_>) -> Option<RuleError> {
         let &(url, offset) = value;
         if url.starts_with("data:") || url.starts_with("javascript:") {
-            Some(SanitizerError::DangerousCssConstruct {
+            Some(RuleError::DangerousCssConstruct {
                 from: url.to_owned(),
                 to: this.map(|x| x.deref().to_owned()),
                 offset,
@@ -139,7 +139,7 @@ impl<R: Default + Verify> RuleWithReplace<R> {
         &self,
         value: R::Item<'_>,
         logger: &impl Log,
-    ) -> Result<Option<R::Output>, SanitizerError> {
+    ) -> Result<Option<R::Output>, RuleError> {
         match R::verify(self.replace.as_ref(), &value) {
             None => Ok(None),
             Some(e) => self
