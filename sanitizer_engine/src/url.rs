@@ -53,6 +53,7 @@ pub fn check_domain(url: &Url) -> Option<String> {
 }
 
 /// Checks if a given host matches a host specified in the policy
+/// Ignores prefix labels (e.g. `youtube.com` matches `www.youtube.com`)
 pub fn host_matches(host: &Host, target: &Host) -> bool {
     match (host, target) {
         (Host::Domain(host, _), Host::Domain(target, _)) => {

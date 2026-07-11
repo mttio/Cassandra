@@ -65,13 +65,12 @@ impl CrawlSession {
         local_name: String,
         depth: usize,
     ) -> Result<(), SanitizerError> {
-        let max_depth = self.policy.resources.max_depth;
-        let max_bytes = self.policy.resources.max_bytes;
+        let total_bytes = *self.total_bytes.lock();
 
-        let remaining_bytes = max_bytes.value.saturating_sub(*self.total_bytes.lock());
-        if remaining_bytes == 0 {
-            max_bytes.handle(&self.logger, RuleError::ContentTooLong(max_bytes.value))?;
-        }
+        self.policy
+            .resources
+            .max_bytes
+            .check(total_bytes, &self.logger)?;
 
         self.logger.info(SanitizerMessage::CrawlingSubresource {
             depth,
@@ -80,7 +79,7 @@ impl CrawlSession {
 
         let fetched = self
             .client
-            .fetch_raw(&url, &self.logger, &self.policy, remaining_bytes)
+            .fetch_raw(&url, &self.logger, &self.policy, total_bytes)
             .await
             .map_err(|e| SanitizerError::UrlFetch(url.clone(), Box::new(e), false))?;
 
@@ -92,7 +91,10 @@ impl CrawlSession {
         let declared = fetched.content_type.as_deref().map(mime::clean);
         let sniffed = mime::sniff(&fetched.data);
         if !mime::validate(declared.as_deref(), sniffed) {
-            let err = RuleError::MimeMismatch(declared.clone(), sniffed.map(|x| x.to_string()));
+            let err = RuleError::MimeMismatch {
+                expected: declared.clone(),
+                actual: sniffed.map(|x| x.to_string()),
+            };
             self.policy
                 .resources
                 .mismatched_mime
@@ -125,10 +127,8 @@ impl CrawlSession {
                 &self.logger,
                 &self.policy.resources.dangerous_css,
             )?;
-            if depth < max_depth.value {
-                for (n_url, n_local) in nested_urls {
-                    self.try_enqueue_subresource(n_url, n_local, depth + 1);
-                }
+            for (n_url, n_local) in nested_urls {
+                self.try_enqueue_subresource(n_url, n_local, depth + 1);
             }
             sanitized_css.into_bytes()
         } else if is_js {
@@ -167,9 +167,7 @@ impl CrawlSession {
 
     /// Checks limits and registers a sub-resource URL, then enqueues it if valid and not visited.
     fn try_enqueue_subresource(self: &Arc<Self>, url: Url, local_name: String, depth: usize) {
-        let max_requests = self.policy.resources.max_requests;
-        let max_depth = self.policy.resources.max_depth;
-
+        let max_requests = &self.policy.resources.max_requests;
         {
             let mut visited = self.url_map.lock();
             if visited.contains_key(&url) {
@@ -178,14 +176,8 @@ impl CrawlSession {
 
             let mut total_requests = self.total_requests.lock();
             *total_requests += 1;
-            if *total_requests > max_requests.value {
-                // Log only the first time we hit the limit
-                if *total_requests == max_requests.value + 1 {
-                    self.logger.log(
-                        max_requests.level,
-                        RuleError::MaxSubresources(max_requests.value),
-                    );
-                }
+            if *total_requests > *max_requests.value.as_ref() {
+                max_requests.check(*total_requests, &self.logger);
 
                 return;
             }
@@ -193,14 +185,9 @@ impl CrawlSession {
             visited.insert(url.clone(), self.index());
         }
 
-        if depth > max_depth.value {
-            if let Err(e) = max_depth.handle(
-                &self.logger,
-                RuleError::MaxSubresourceDepth(max_depth.value),
-            ) {
-                self.logger.error(e);
-                return;
-            }
+        if let Err(e) = self.policy.resources.max_depth.check(depth, &self.logger) {
+            self.logger.error(e);
+            return;
         }
 
         let clone = Arc::clone(self);

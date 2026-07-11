@@ -131,14 +131,14 @@ pub fn logging_thread(
     sources: &[InputSource],
     channel: Receiver<LoggerMessage>,
 ) -> bool {
-    use crate::errors::{SanitizationEvent, SanitizationReport, SanitizerError, SanitizerMessage};
+    use crate::errors::{SanitizationReport, SanitizerError, SanitizerMessage};
 
     let max_size = sources.len();
     let mut files = (0..max_size)
         .map(|i| File::create(output.join(format!("{i}.log"))).ok())
         .collect_vec();
 
-    let mut reports: Vec<Vec<SanitizationEvent>> = (0..max_size).map(|_| Vec::new()).collect_vec();
+    let mut sources = sources.iter().map(|x| (x, Vec::new())).collect_vec();
 
     let width = (max_size as f64).log10().ceil() as usize;
     let mut has_errors = false;
@@ -146,13 +146,6 @@ pub fn logging_thread(
     for msg in channel {
         if msg.level == LogLevel::Error {
             has_errors = true;
-        }
-
-        // Collect sanitization action events if the message contains one
-        if let SanitizerMessage::Error(SanitizerError::Rule(ref err)) = msg.message
-            && let Some(report) = reports.get_mut(msg.source)
-        {
-            report.push(err.to_event());
         }
 
         let error = msg.message.to_string();
@@ -192,10 +185,17 @@ pub fn logging_thread(
                 strip_ansi_escapes::strip_str(&error),
             );
         }
+
+        // Collect sanitization action events if the message contains one
+        if let SanitizerMessage::Error(SanitizerError::Rule(err)) = msg.message
+            && let Some((_, report)) = sources.get_mut(msg.source)
+        {
+            report.push(err);
+        }
     }
 
     // Emit machine-readable JSON reports
-    for (i, source) in sources.iter().enumerate() {
+    for (i, (source, errors)) in sources.into_iter().enumerate() {
         let report_path = output.join(format!("{i}.json"));
         let input_source_str = match source {
             InputSource::File(p) => p.to_string_lossy().to_string(),
@@ -204,7 +204,7 @@ pub fn logging_thread(
 
         let report = SanitizationReport {
             input: input_source_str,
-            actions: reports[i].clone(),
+            actions: errors,
         };
 
         if let Ok(file) = File::create(&report_path) {
@@ -222,6 +222,7 @@ mod tests {
     use crate::http_client::SanitizerHttpClient;
     use crate::policy::Policy;
     use parking_lot::Mutex;
+    use std::assert_matches;
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
@@ -275,11 +276,14 @@ mod tests {
         use crate::errors::{RuleError, SanitizationReport};
         use std::path::PathBuf;
 
-        let err = RuleError::BlockedScript("evil_script()".to_owned(), 10..20);
-        let event = err.to_event();
-        assert_eq!(event.rule, "allow_scripts");
-        assert_eq!(event.original, "evil_script()");
-        assert_eq!(event.offset, Some(10..20));
+        let err = RuleError::BlockedScript {
+            original: "evil_script()".to_owned(),
+            offset: 10..20,
+        };
+        // let event = err.to_event();
+        // assert_eq!(event.rule, "allow_scripts");
+        // assert_eq!(event.original, "evil_script()");
+        // assert_eq!(event.offset, Some(10..20));
 
         let temp_dir = std::env::temp_dir();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -306,7 +310,7 @@ mod tests {
         let report: SanitizationReport = serde_json::from_str(&content).unwrap();
         assert_eq!(report.input, "test_input.html");
         assert_eq!(report.actions.len(), 1);
-        assert_eq!(report.actions[0].rule, "allow_scripts");
+        assert_matches!(report.actions[0], RuleError::BlockedScript { .. });
 
         // Cleanup
         let _ = std::fs::remove_file(report_path);

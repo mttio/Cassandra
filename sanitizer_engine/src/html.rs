@@ -106,7 +106,7 @@ fn handle_dangerous_link(
             base_url,
             policy,
             logger,
-            |x| replace_attribute(&crate::policy::sanitize_attribute(x), attr_name, el),
+            |x| replace_attribute(&crate::rules::sanitize_attribute(x), attr_name, el),
         )?)
     } else {
         Ok(None)
@@ -176,7 +176,8 @@ pub fn create_rewriter<'a, W: Write>(
             replace_attribute(&value, &name, el);
         }
 
-        match el.tag_name().as_str() {
+        let tag = el.tag_name();
+        match tag.as_str() {
             "base" => {
                 if let Some(href) = el.get_attribute("href")
                     && let Ok(new_base) = state.base.join(&href)
@@ -294,7 +295,7 @@ pub fn create_rewriter<'a, W: Write>(
                 }
             }
             "script" => {
-                let location = el.source_location();
+                let location = el.source_location().bytes();
 
                 if let Some(resolved) =
                     handle_dangerous_link(el, "src", &state.base, policy, logger)?
@@ -309,10 +310,10 @@ pub fn create_rewriter<'a, W: Write>(
                     };
 
                     if !host_matched {
-                        logger.error(RuleError::BlockedScript(
-                            resolved.to_string(),
-                            location.bytes(),
-                        ));
+                        logger.error(RuleError::BlockedScript {
+                            original: resolved.to_string(),
+                            offset: location,
+                        });
                         el.remove();
                         return Ok(());
                     }
@@ -325,7 +326,10 @@ pub fn create_rewriter<'a, W: Write>(
                     }
                 } else {
                     if let Some(src) = el.get_attribute("src") {
-                        logger.error(RuleError::BlockedScript(src.clone(), location.bytes()));
+                        logger.error(RuleError::BlockedScript {
+                            original: src.clone(),
+                            offset: location,
+                        });
                         el.remove();
                     }
                 }
@@ -346,11 +350,11 @@ pub fn create_rewriter<'a, W: Write>(
                     };
 
                     if !host_matched {
-                        logger.error(RuleError::BlockedOrigin(
-                            "iframe".to_owned(),
-                            resolved.to_string(),
-                            location,
-                        ));
+                        logger.error(RuleError::BlockedOrigin {
+                            tag,
+                            original: resolved.to_string(),
+                            offset: location,
+                        });
                         el.remove();
                         return Ok(());
                     }
@@ -372,11 +376,11 @@ pub fn create_rewriter<'a, W: Write>(
                     };
 
                     if !host_matched {
-                        logger.error(RuleError::BlockedOrigin(
-                            "object".to_owned(),
-                            resolved.to_string(),
-                            location,
-                        ));
+                        logger.error(RuleError::BlockedOrigin {
+                            tag,
+                            original: resolved.to_string(),
+                            offset: location,
+                        });
                         el.remove();
                         return Ok(());
                     }
@@ -388,7 +392,10 @@ pub fn create_rewriter<'a, W: Write>(
                 {
                     let content = el.get_attribute("content").unwrap_or_default();
                     let location = el.source_location().bytes();
-                    logger.error(RuleError::BlockedMetaRefresh(content, location));
+                    logger.error(RuleError::BlockedMetaRefresh {
+                        original: content,
+                        offset: location,
+                    });
                     el.remove();
                 }
             }
@@ -429,7 +436,10 @@ pub fn create_rewriter<'a, W: Write>(
                 let start = inline_script_location.unwrap_or(0);
                 let end = t.source_location().bytes().end;
 
-                logger.error(RuleError::BlockedScript("<inline>".to_owned(), start..end));
+                logger.error(RuleError::BlockedScript {
+                    original: "<inline>".to_owned(),
+                    offset: start..end,
+                });
             }
             inline_script.clear();
             inline_script_location = None;
@@ -474,8 +484,7 @@ mod tests {
     use super::*;
     use crate::{
         log::{LogLevel, NullLogger},
-        policy::{DangerousUriRule, EventHandlerRule},
-        rules::RuleWithReplace,
+        rules::{self, ReplaceRule},
     };
 
     #[test]
@@ -503,8 +512,10 @@ mod tests {
     #[test]
     fn test_event_handler_replacement() {
         let mut policy = Policy::default();
-        policy.html.event_handlers =
-            RuleWithReplace::new(EventHandlerRule::new("alert('blocked')"), LogLevel::Info);
+        policy.html.event_handlers = ReplaceRule::new(
+            rules::EventHandlers::new("alert('blocked')"),
+            LogLevel::Info,
+        );
 
         let input_html = b"<button onclick=\"alert(1)\"></button>";
         let mut output = Vec::new();
@@ -524,7 +535,7 @@ mod tests {
     #[test]
     fn test_event_handler_ignore() {
         let mut policy = Policy::default();
-        policy.html.event_handlers = RuleWithReplace::keep(LogLevel::Trace);
+        policy.html.event_handlers = ReplaceRule::keep(LogLevel::Trace);
 
         let input_html = b"<button onclick=\"alert(1)\"></button>";
         let mut output = Vec::new();
@@ -625,7 +636,7 @@ mod tests {
     #[test]
     fn test_dangerous_uris_sanitization() {
         let mut policy = Policy::default();
-        policy.html.dangerous_uris = RuleWithReplace::with_default(LogLevel::Info);
+        policy.html.dangerous_uris = ReplaceRule::with_default(LogLevel::Info);
 
         let input_html = b"<a href=\"javascript:alert(1)\" src=\"  data:text/html,malicious  \" data-url=\"other\">link</a>";
         let mut output = Vec::new();
@@ -648,7 +659,7 @@ mod tests {
     fn test_dangerous_uris_bypass_whitespace() {
         let mut policy = Policy::default();
         policy.html.dangerous_uris =
-            RuleWithReplace::new(DangerousUriRule::new(""), LogLevel::Info);
+            ReplaceRule::new(rules::DangerousUris::new(""), LogLevel::Info);
 
         let input_html = b"<a href=\"\n\t javascript:alert(1)\">link</a>";
         let mut output = Vec::new();
@@ -669,7 +680,7 @@ mod tests {
     #[test]
     fn test_dangerous_uris_ignore() {
         let mut policy = Policy::default();
-        policy.html.dangerous_uris = RuleWithReplace::keep(LogLevel::Trace);
+        policy.html.dangerous_uris = ReplaceRule::keep(LogLevel::Trace);
 
         let input_html = b"<a href=\"javascript:alert(1)\">link</a>";
         let mut output = Vec::new();
@@ -690,7 +701,7 @@ mod tests {
     fn test_idn_rewriting() {
         // Case 1: IDN is Warn. It should preserve the link.
         let mut policy = Policy::default();
-        policy.urls.idn = RuleWithReplace::keep(LogLevel::Warn);
+        policy.urls.idn = ReplaceRule::keep(LogLevel::Warn);
         policy.resources.fetch_sub_resources = false;
 
         let mut crawler_state = CrawlerState {
@@ -714,7 +725,7 @@ mod tests {
         );
 
         // Case 2: IDN is Warn with rewriting enabled. It should rewrite to "#".
-        policy.urls.idn = RuleWithReplace::with_default(LogLevel::Warn);
+        policy.urls.idn = ReplaceRule::with_default(LogLevel::Warn);
         let mut output2 = Vec::new();
         {
             let mut rewriter =

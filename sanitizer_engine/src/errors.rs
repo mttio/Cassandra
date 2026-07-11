@@ -9,206 +9,142 @@ use url::{Host, Url};
 
 fn format_option_range(range: &Option<Range<usize>>) -> String {
     match range {
-        Some(x) => format_range(x),
+        Some(x) => format!(" {}", format_range(x)),
         None => "".to_owned(),
     }
 }
 
 fn format_range(range: &Range<usize>) -> String {
     format!(
-        " @ {}..{}",
+        "@ {}..{}",
         range.start.to_string().bright_magenta(),
         range.end.to_string().bright_magenta()
     )
 }
 
-#[derive(Debug, Error, Serialize)]
+trait Pretty {
+    fn pretty(&self) -> colored::ColoredString;
+}
+
+impl<T: ToString> Pretty for T {
+    fn pretty(&self) -> colored::ColoredString {
+        self.to_string().bright_cyan()
+    }
+}
+
+#[derive(Debug, Clone, Error, Deserialize, Serialize, PartialEq)]
 #[error(transparent)]
+#[serde(tag = "type")]
 pub enum RuleError {
-    #[error("too many redirects (max = {})", .0.to_string().bright_cyan())]
+    #[error("too many redirects (max = {})", max.pretty())]
     #[serde(rename = "too_many_redirects")]
-    TooManyRedirects(usize),
-    #[error("dangerous domain ({}){}", .0.to_string().bright_cyan(), format_option_range(.1))]
-    #[serde(rename = "dangerous_domain")]
-    DangerousDomain(Host, Option<Range<usize>>),
-    #[error("event handler ({}){}", .0.bright_cyan(), format_option_range(.1))]
-    #[serde(rename = "event_handlers")]
-    EventHandler(String, Option<Range<usize>>),
-    #[error("dangerous URI ({}){}", .0.bright_cyan(), format_option_range(.1))]
-    #[serde(rename = "dangerous_uris")]
-    DangerousUri(String, Option<Range<usize>>),
-    #[error("IDN url ({})", .0)]
-    #[serde(rename = "idn")]
-    Idn(String),
-    #[error("blocked script (source = {}){}", .0.bright_cyan(), format_range(.1))]
-    BlockedScript(String, Range<usize>),
+    TooManyRedirects { max: usize },
+    #[error("blocked script {} (source = {})", format_range(offset), original.pretty())]
+    #[serde(rename = "allow_scripts")]
+    BlockedScript {
+        original: String,
+        offset: Range<usize>,
+    },
+    #[error("connecting to dangerous domain ({})", original.pretty())]
+    #[serde(rename = "dangerous_domain_connection")]
+    DangerousDomainConnection { original: Host },
     #[error(
-        "blocked origin (tag = {}, source = {}){}",
-        .0.bright_cyan(),
-        .1.bright_cyan(),
-        format_range(.2)
+        "blocked origin (tag = {}, source = {}) {}",
+        tag.pretty(),
+        original.pretty(),
+        format_range(offset)
     )]
-    BlockedOrigin(String, String, Range<usize>),
+    #[serde(rename = "allow_origin")]
+    BlockedOrigin {
+        tag: String,
+        original: String,
+        offset: Range<usize>,
+    },
     #[error(
-        "blocked meta refresh (content = {}){}",
-        .0.bright_cyan(),
-        format_range(.1),
+        "blocked meta refresh (content = {}) {}",
+        original.pretty(),
+        format_range(offset),
     )]
-    BlockedMetaRefresh(String, Range<usize>),
-    #[error(
-        "response body exceeds maximum size ({} bytes)",
-        .0.to_string().bright_cyan()
-    )]
-    ContentTooLong(usize),
+    #[serde(rename = "meta_refresh")]
+    BlockedMetaRefresh {
+        original: String,
+        offset: Range<usize>,
+    },
     #[error(
         "MIME mismatch (expected = {}, actual = {})",
-        .0.as_deref().unwrap_or("<none>"),
-        .1.as_deref().unwrap_or("<none>"),
+        expected.as_deref().unwrap_or("<none>"),
+        actual.as_deref().unwrap_or("<none>"),
     )]
-    MimeMismatch(Option<String>, Option<String>),
-    #[error("Sub-resource crawl limit reached: max_requests = {}", .0)]
-    MaxSubresources(usize),
-    #[error("Sub-resource crawl depth limit reached: max_requests = {}", .0)]
-    MaxSubresourceDepth(usize),
+    #[serde(rename = "mime_mismatch")]
+    MimeMismatch {
+        expected: Option<String>,
+        actual: Option<String>,
+    },
+    #[error("response body exceeds maximum size ({} bytes)", max.pretty())]
+    #[serde(rename = "content_too_long")]
+    ContentTooLong { max: usize },
+    #[error("Sub-resource crawl limit reached: max_requests = {}", max.pretty())]
+    #[serde(rename = "too_many_subresources")]
+    MaxSubresources { max: usize },
+    #[error("Sub-resource crawl depth limit reached: max_requests = {}", max.pretty())]
+    #[serde(rename = "subresources_too_deep")]
+    MaxSubresourceDepth { max: usize },
     #[error("custom XML entity declaration detected (potential XML bomb)")]
+    #[serde(rename = "xml_entity_declaration")]
     XmlEntityDeclaration,
-    #[error("embedded active content ({0}) detected")]
-    ActiveContent(String),
-    #[error("Dangerous construct `{0}` detected in JS")]
-    DangerousJsConstruct(String),
+    #[error("embedded active content ({original}) detected")]
+    #[serde(rename = "active_content")]
+    ActiveContent { original: String },
     #[error(
-        "Dangerous construct detected in CSS: `{}`{} @ {}",
-        from.bright_yellow(),
-        match .to {
-            Some(x) => format!(" {} `{}`", "->".bright_cyan(), x.bright_yellow()),
+        "{inner}{}",
+        match replacement {
+            Some(x) => format!(" {} `{}`", "->".bright_yellow(), x.pretty()),
             None => "".to_owned(),
         },
-        .offset.to_string().bright_magenta(),
     )]
-    DangerousCssConstruct {
-        from: String,
-        to: Option<String>,
-        offset: usize,
+    #[serde(untagged)]
+    Replace {
+        #[serde(flatten)]
+        inner: RuleReplaceError,
+        replacement: Option<String>,
     },
 }
 
-impl RuleError {
-    pub fn to_event(&self) -> SanitizationEvent {
-        match self {
-            Self::DangerousCssConstruct { from, to, offset } => SanitizationEvent {
-                rule: "dangerous_css".to_owned(),
-                tag: "style".to_owned(),
-                offset: Some(*offset..*offset + from.len()),
-                original: from.clone(),
-                replacement: to.clone(),
-            },
-            Self::DangerousJsConstruct(value) => SanitizationEvent {
-                rule: "dangerous_js".to_owned(),
-                tag: "script".to_owned(),
-                offset: None,
-                original: value.clone(),
-                replacement: None,
-            },
-            Self::BlockedScript(source, location) => SanitizationEvent {
-                rule: "allow_scripts".to_owned(),
-                tag: "script".to_owned(),
-                offset: Some(location.clone()),
-                original: source.clone(),
-                replacement: None,
-            },
-            Self::BlockedOrigin(tag, source, location) => SanitizationEvent {
-                rule: "allow_origins".to_owned(),
-                tag: tag.clone(),
-                offset: Some(location.clone()),
-                original: source.clone(),
-                replacement: None,
-            },
-            Self::BlockedMetaRefresh(content, location) => SanitizationEvent {
-                rule: "meta_refresh".to_owned(),
-                tag: "meta".to_owned(),
-                offset: Some(location.clone()),
-                original: content.clone(),
-                replacement: None,
-            },
-            Self::EventHandler(name, location) => SanitizationEvent {
-                rule: "event_handlers".to_owned(),
-                tag: "attribute".to_owned(),
-                offset: location.clone(),
-                original: name.clone(),
-                replacement: None,
-            },
-            Self::DangerousUri(value, location) => SanitizationEvent {
-                rule: "dangerous_uris".to_owned(),
-                tag: "attribute".to_owned(),
-                offset: location.clone(),
-                original: value.clone(),
-                replacement: None,
-            },
-            Self::Idn(original) => SanitizationEvent {
-                rule: "idn".to_owned(),
-                tag: "url".to_owned(),
-                offset: None,
-                original: original.clone(),
-                replacement: None,
-            },
-            Self::DangerousDomain(host, location) => SanitizationEvent {
-                rule: "dangerous_domain".to_owned(),
-                tag: "domain".to_owned(),
-                offset: location.clone(),
-                original: host.to_string(),
-                replacement: None,
-            },
-            Self::ActiveContent(content) => SanitizationEvent {
-                rule: "active_content".to_owned(),
-                tag: "pdf".to_owned(),
-                offset: None,
-                original: content.clone(),
-                replacement: None,
-            },
-            Self::XmlEntityDeclaration => SanitizationEvent {
-                rule: "xml_entity_declaration".to_owned(),
-                tag: "xml".to_owned(),
-                offset: None,
-                original: "<!ENTITY".to_owned(),
-                replacement: None,
-            },
-            Self::MimeMismatch(expected, actual) => SanitizationEvent {
-                rule: "mime_mismatch".to_owned(),
-                tag: "header".to_owned(),
-                offset: None,
-                original: format!("expected: {:?}, actual: {:?}", expected, actual),
-                replacement: None,
-            },
-            Self::ContentTooLong(max_size) => SanitizationEvent {
-                rule: "content_too_long".to_owned(),
-                tag: "resource".to_owned(),
-                offset: None,
-                original: format!("exceeds {} bytes", max_size),
-                replacement: None,
-            },
-            Self::TooManyRedirects(max_redirects) => SanitizationEvent {
-                rule: "too_many_redirects".to_owned(),
-                tag: "connection".to_owned(),
-                offset: None,
-                original: format!("exceeds {} redirects", max_redirects),
-                replacement: None,
-            },
-            Self::MaxSubresources(max) => SanitizationEvent {
-                rule: "too_many_subresources".to_owned(),
-                tag: "connection".to_owned(),
-                offset: None,
-                original: format!("sub-resource crawl limit reached: max = {max}"),
-                replacement: None,
-            },
-            Self::MaxSubresourceDepth(max) => SanitizationEvent {
-                rule: "subresources_too_deep".to_owned(),
-                tag: "connection".to_owned(),
-                offset: None,
-                original: format!("sub-resource crawl depth limit reached: max = {max}"),
-                replacement: None,
-            },
-        }
-    }
+#[derive(Debug, Clone, Error, Deserialize, Serialize, PartialEq)]
+#[error(transparent)]
+#[serde(tag = "type")]
+pub enum RuleReplaceError {
+    #[error("event handler{}: `{}`", format_option_range(offset), original.pretty())]
+    #[serde(rename = "event_handlers")]
+    EventHandler {
+        original: String,
+        offset: Option<Range<usize>>,
+    },
+    #[error("dangerous domain {}: `{}`", format_range(offset), original.pretty())]
+    #[serde(rename = "dangerous_domain")]
+    DangerousDomain {
+        original: Host,
+        offset: Range<usize>,
+    },
+    #[error("dangerous URI{}: `{}`", format_option_range(offset), original.pretty())]
+    #[serde(rename = "dangerous_uris")]
+    DangerousUri {
+        original: String,
+        offset: Option<Range<usize>>,
+    },
+    #[error("IDN url: `{}`", original.pretty())]
+    #[serde(rename = "idn")]
+    Idn { original: String },
+    #[error("Dangerous construct detected in JS: `{}`", original.pretty())]
+    #[serde(rename = "dangerous_js")]
+    DangerousJsConstruct { original: String },
+    #[error(
+        "Dangerous construct detected in CSS @ {}: `{}`",
+        offset.to_string().bright_magenta(),
+        original.pretty(),
+    )]
+    #[serde(rename = "dangerous_css")]
+    DangerousCssConstruct { original: String, offset: usize },
 }
 
 /// An error that the sanitizer can produce
@@ -299,17 +235,8 @@ impl From<RuleError> for SanitizerError {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct SanitizationEvent {
-    pub rule: String,
-    pub tag: String,
-    pub offset: Option<Range<usize>>,
-    pub original: String,
-    pub replacement: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SanitizationReport {
     pub input: String,
-    pub actions: Vec<SanitizationEvent>,
+    pub actions: Vec<RuleError>,
 }

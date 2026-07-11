@@ -187,11 +187,10 @@ impl SanitizerHttpClient {
                 let check = || -> Result<(), SanitizerError> {
                     policy.urls.idn.check(attempt.url(), &logger)?;
 
-                    let max_redirects = policy.connections.max_redirects;
-                    if attempt.previous().len() == max_redirects.value + 1 {
-                        max_redirects
-                            .handle(&logger, RuleError::TooManyRedirects(max_redirects.value))?;
-                    }
+                    policy
+                        .connections
+                        .max_redirects
+                        .check(attempt.previous().len(), &logger)?;
 
                     if let Some(host) = attempt.url().host().map(|x| x.to_owned()) {
                         dangerous_domain_action
@@ -227,9 +226,9 @@ impl SanitizerHttpClient {
     pub async fn fetch_raw(
         &self,
         url: &Url,
-        _logger: &impl Log,
-        _policy: &Policy,
-        remaining_bytes: usize,
+        logger: &impl Log,
+        policy: &Policy,
+        current_bytes: usize,
     ) -> Result<FetchedContent, SanitizerError> {
         if url.scheme() != "https" {
             return Err(SanitizerError::NonHttpsUrl);
@@ -252,9 +251,11 @@ impl SanitizerHttpClient {
             .get(header::CONTENT_LENGTH)
             .and_then(|x| x.to_str().ok())
             .and_then(|x| x.parse::<usize>().ok())
-            && length > remaining_bytes
         {
-            return Err(RuleError::ContentTooLong(remaining_bytes).into());
+            policy
+                .resources
+                .max_bytes
+                .check(length + current_bytes, logger)?;
         }
 
         let content_type = response
@@ -279,15 +280,14 @@ impl SanitizerHttpClient {
 
         let mut stream = response.bytes_stream();
         let mut data = Vec::new();
-        let mut length = 0;
+        let mut length = current_bytes;
         let mut entity_scanner = crate::resources::EntityScanner::new();
 
         while let Some(item) = stream.next().await {
             let chunk = item.map_err(SanitizerError::Streaming)?;
             length += chunk.len();
-            if length > remaining_bytes {
-                return Err(RuleError::ContentTooLong(remaining_bytes).into());
-            }
+            policy.resources.max_bytes.check(length, logger)?;
+
             if is_xml_html_svg && entity_scanner.feed_chunk(&chunk) {
                 return Err(RuleError::XmlEntityDeclaration.into());
             }
@@ -326,18 +326,14 @@ impl SanitizerHttpClient {
             return Err(SanitizerError::ServerStatus(response.status()));
         }
 
-        let max_bytes = policy.resources.max_bytes;
-
         // Fast-fail for `Content-Length` header
         if let Some(length) = response
             .headers()
             .get(header::CONTENT_LENGTH)
             .and_then(|x| x.to_str().ok())
             .and_then(|x| x.parse::<usize>().ok())
-            && length > max_bytes.value
         {
-            let _ = max_bytes.handle(logger, RuleError::ContentTooLong(max_bytes.value));
-            return Err(RuleError::ContentTooLong(max_bytes.value).into());
+            policy.resources.max_bytes.check(length, logger)?;
         }
 
         let content_type = response
@@ -349,9 +345,11 @@ impl SanitizerHttpClient {
         if let Some(content_type) = content_type
             && !content_type.contains("text/html")
         {
-            return Err(
-                RuleError::MimeMismatch(Some("text/html".to_owned()), Some(content_type)).into(),
-            );
+            return Err(RuleError::MimeMismatch {
+                expected: Some("text/html".to_owned()),
+                actual: Some(content_type),
+            }
+            .into());
         }
 
         let mut stream = response.bytes_stream();
@@ -375,11 +373,10 @@ impl SanitizerHttpClient {
             let chunk = item.map_err(SanitizerError::Streaming)?;
 
             total_bytes += chunk.len();
-            if total_bytes > max_bytes.value {
+            if let Err(e) = policy.resources.max_bytes.check(total_bytes, logger) {
                 drop(rewriter);
                 let _ = std::fs::remove_file(output_path);
-                let _ = max_bytes.handle(logger, RuleError::ContentTooLong(max_bytes.value));
-                return Err(RuleError::ContentTooLong(max_bytes.value).into());
+                return Err(e.into());
             }
 
             if entity_scanner.feed_chunk(&chunk) {

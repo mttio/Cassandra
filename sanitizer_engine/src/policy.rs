@@ -1,14 +1,11 @@
-use std::{fmt::Debug, ops::Range, time::Duration};
+use std::{fmt::Debug, time::Duration};
 
-use nutype::nutype;
 use serde::{Deserialize, Serialize};
-use url::{Host, Url};
+use url::Host;
 
 use crate::{
-    errors::RuleError,
     log::LogLevel,
-    rules::{CssUrl, JsReplace, RuleWithReplace, RuleWithValue, Verify},
-    url::host_matches,
+    rules::{self, ReplaceRule, RuleWithValue},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,105 +41,17 @@ pub struct Policy {
     pub connections: ConnectionsPolicy,
 }
 
-pub fn sanitize_attribute(s: &str) -> String {
-    s.replace([' ', '\n', '\r', '\t', '\x0C', '/', '>', '='], "")
-}
-
-/// Newtype to remove invalid characters in HTML url attributes.
-/// Removes the attribute if empty.
-#[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
-    sanitize(with = |x| sanitize_attribute(&x)),
-    default = "#"
-)]
-pub struct IdnRule(String);
-
-impl Verify for IdnRule {
-    type Item<'a> = &'a Url;
-
-    type Output = String;
-
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
-    }
-
-    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<crate::errors::RuleError> {
-        crate::url::check_domain(value).map(RuleError::Idn)
-    }
-}
-
-#[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
-    sanitize(with = |x| sanitize_attribute(&x)),
-    default = ""
-)]
-pub struct EventHandlerRule(String);
-
-impl Verify for EventHandlerRule {
-    type Item<'a> = &'a lol_html::html_content::Attribute<'a>;
-
-    type Output = String;
-
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
-    }
-
-    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<RuleError> {
-        let name = value.name().to_lowercase();
-
-        if name.starts_with("on") {
-            let location = value
-                .value_source_location()
-                .or_else(|| value.name_source_location())
-                .map(|x| x.bytes());
-
-            Some(RuleError::EventHandler(name, location))
-        } else {
-            None
-        }
-    }
-}
-
-#[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
-    sanitize(with = |x| sanitize_attribute(&x)),
-    default = "#"
-)]
-pub struct DangerousUriRule(String);
-
-impl Verify for DangerousUriRule {
-    type Item<'a> = &'a lol_html::html_content::Attribute<'a>;
-
-    type Output = String;
-
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
-    }
-
-    fn verify(_this: Option<&Self>, value: &Self::Item<'_>) -> Option<RuleError> {
-        let attr_value = value.value().trim().to_lowercase();
-
-        if attr_value.starts_with("javascript:") || attr_value.starts_with("data:") {
-            let location = value.value_source_location().map(|x| x.bytes());
-
-            Some(RuleError::DangerousUri(attr_value, location))
-        } else {
-            None
-        }
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct HtmlPolicy {
     pub allow_scripts: Vec<String>,
     pub allow_origins: Vec<PolicyHost>,
     /// Action to perform when an event handler is encountered
-    pub event_handlers: RuleWithReplace<EventHandlerRule>,
-    /// Action to perform when a dangerous domain is encountered
-    pub dangerous_domain: RuleWithReplace<DangerousDomain2>,
-    /// Action to perform when a dangerous URI (javascript:, data:) is encountered
-    pub dangerous_uris: RuleWithReplace<DangerousUriRule>,
+    pub event_handlers: ReplaceRule<rules::EventHandlers>,
+    /// Rule for dangerous domains
+    pub dangerous_domain: ReplaceRule<rules::DangerousDomain2>,
+    /// Rule for dangerous URIs (javascript:, data:)
+    pub dangerous_uris: ReplaceRule<rules::DangerousUris>,
 }
 
 impl Default for HtmlPolicy {
@@ -154,9 +63,9 @@ impl Default for HtmlPolicy {
                 .flat_map(Host::parse)
                 .map(PolicyHost)
                 .collect(),
-            event_handlers: RuleWithReplace::with_default(LogLevel::Info),
-            dangerous_domain: RuleWithReplace::with_default(LogLevel::Error),
-            dangerous_uris: RuleWithReplace::with_default(LogLevel::Info),
+            event_handlers: ReplaceRule::with_default(LogLevel::Info),
+            dangerous_domain: ReplaceRule::with_default(LogLevel::Error),
+            dangerous_uris: ReplaceRule::with_default(LogLevel::Info),
         }
     }
 }
@@ -168,7 +77,7 @@ pub struct UrlsPolicy {
     /// Ignores prefix labels (e.g. `youtube.com` matches `www.youtube.com`)
     pub dangerous_domains: Vec<PolicyHost>,
     /// Action to perform when a non-latin url is encountered
-    pub idn: RuleWithReplace<IdnRule>,
+    pub idn: ReplaceRule<rules::Idn>,
 }
 
 impl Default for UrlsPolicy {
@@ -179,7 +88,7 @@ impl Default for UrlsPolicy {
                 .flat_map(Host::parse)
                 .map(PolicyHost)
                 .collect(),
-            idn: RuleWithReplace::with_default(LogLevel::Warn),
+            idn: ReplaceRule::with_default(LogLevel::Warn),
         }
     }
 }
@@ -188,78 +97,28 @@ impl Default for UrlsPolicy {
 #[serde(default)]
 pub struct ResourcesPolicy {
     pub fetch_sub_resources: bool,
-    pub max_depth: RuleWithValue<usize>,
-    pub max_bytes: RuleWithValue<usize>,
-    pub max_requests: RuleWithValue<usize>,
+    pub max_depth: RuleWithValue<rules::MaxSubresourceDepth>,
+    pub max_bytes: RuleWithValue<rules::MaxBytes>,
+    pub max_requests: RuleWithValue<rules::MaxSubresources>,
     pub mismatched_mime: LogLevel,
     pub unknown_resource: LogLevel,
     pub pdf_active_content: LogLevel,
-    pub dangerous_js: RuleWithReplace<JsReplace>,
-    pub dangerous_css: RuleWithReplace<CssUrl>,
+    pub dangerous_js: ReplaceRule<rules::JsReplace>,
+    pub dangerous_css: ReplaceRule<rules::CssUrl>,
 }
 
 impl Default for ResourcesPolicy {
     fn default() -> Self {
         Self {
             fetch_sub_resources: true,
-            max_depth: RuleWithValue::new(1, LogLevel::Error),
-            max_bytes: RuleWithValue::new(1024 * 1024, LogLevel::Error),
-            max_requests: RuleWithValue::new(5, LogLevel::Error),
+            max_depth: RuleWithValue::with_default(LogLevel::Error),
+            max_bytes: RuleWithValue::with_default(LogLevel::Error),
+            max_requests: RuleWithValue::with_default(LogLevel::Error),
             mismatched_mime: LogLevel::Error,
             unknown_resource: LogLevel::Error,
             pdf_active_content: LogLevel::Error,
-            dangerous_js: RuleWithReplace::with_default(LogLevel::Error),
-            dangerous_css: RuleWithReplace::with_default(LogLevel::Warn),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
-pub struct DangerousDomain;
-
-impl Verify for DangerousDomain {
-    type Item<'a> = (&'a Host, &'a [PolicyHost]);
-
-    type Output = ();
-
-    fn to_output(&self) -> Self::Output {}
-
-    fn verify(_: Option<&Self>, &(host, domains): &Self::Item<'_>) -> Option<RuleError> {
-        if domains.iter().any(|x| host_matches(host, &x.0)) {
-            Some(RuleError::DangerousDomain(host.to_owned(), None))
-        } else {
-            None
-        }
-    }
-}
-
-#[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
-    sanitize(with = |x| sanitize_attribute(&x)),
-    default = "#"
-)]
-pub struct DangerousDomain2(String);
-
-impl Verify for DangerousDomain2 {
-    type Item<'a> = (&'a Host, &'a [PolicyHost], Range<usize>);
-
-    type Output = String;
-
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
-    }
-
-    fn verify(
-        _: Option<&Self>,
-        &(host, domains, ref location): &Self::Item<'_>,
-    ) -> Option<RuleError> {
-        if domains.iter().any(|x| host_matches(host, &x.0)) {
-            Some(RuleError::DangerousDomain(
-                host.to_owned(),
-                Some(location.clone()),
-            ))
-        } else {
-            None
+            dangerous_js: ReplaceRule::with_default(LogLevel::Error),
+            dangerous_css: ReplaceRule::with_default(LogLevel::Warn),
         }
     }
 }
@@ -272,11 +131,11 @@ pub struct ConnectionsPolicy {
     #[serde(with = "humantime_serde")]
     pub overall_timeout: Duration,
     /// Maximum number of redirects for a single connection
-    pub max_redirects: RuleWithValue<usize>,
+    pub max_redirects: RuleWithValue<rules::MaxRedirects>,
     /// User agent to include in every request
     pub user_agent: String,
     /// Action to perform when connecting to a dangerous domain
-    pub dangerous_domain: RuleWithReplace<DangerousDomain>,
+    pub dangerous_domain: RuleWithValue<rules::DangerousDomain>,
 }
 
 impl Default for ConnectionsPolicy {
@@ -284,9 +143,9 @@ impl Default for ConnectionsPolicy {
         Self {
             connection_timeout: Duration::from_secs(3),
             overall_timeout: Duration::from_secs(15),
-            max_redirects: RuleWithValue::new(2, LogLevel::Error),
+            max_redirects: RuleWithValue::with_default(LogLevel::Error),
             user_agent: "CoolBot/0.0 (https://example.org/coolbot/; coolbot@example.org) generic-library/0.0".to_owned(),
-            dangerous_domain: RuleWithReplace::keep(LogLevel::Error),
+            dangerous_domain: RuleWithValue::with_default(LogLevel::Error),
         }
     }
 }

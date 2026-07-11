@@ -172,27 +172,37 @@ pub fn scan_pdf_for_active_content(data: &[u8]) -> Result<(), SanitizerError> {
             if i + 3 <= data.len() && &data[i..i + 3] == b"/JS" {
                 let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(RuleError::ActiveContent("JavaScript (/JS)".to_string()).into());
+                    return Err(RuleError::ActiveContent {
+                        original: "JavaScript (/JS)".to_string(),
+                    }
+                    .into());
                 }
             }
             if i + 11 <= data.len() && &data[i..i + 11] == b"/JavaScript" {
                 let next_char = if i + 11 < data.len() { data[i + 11] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(RuleError::ActiveContent("JavaScript".to_string()).into());
+                    return Err(RuleError::ActiveContent {
+                        original: "JavaScript".to_string(),
+                    }
+                    .into());
                 }
             }
             if i + 3 <= data.len() && &data[i..i + 3] == b"/AA" {
                 let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(
-                        RuleError::ActiveContent("Additional Action (/AA)".to_string()).into(),
-                    );
+                    return Err(RuleError::ActiveContent {
+                        original: "Additional Action (/AA)".to_string(),
+                    }
+                    .into());
                 }
             }
             if i + 11 <= data.len() && &data[i..i + 11] == b"/OpenAction" {
                 let next_char = if i + 11 < data.len() { data[i + 11] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(RuleError::ActiveContent("OpenAction".to_string()).into());
+                    return Err(RuleError::ActiveContent {
+                        original: "OpenAction".to_string(),
+                    }
+                    .into());
                 }
             }
         }
@@ -264,7 +274,7 @@ mod tests {
     use super::*;
     use crate::{
         log::{LogLevel, NullLogger},
-        rules::RuleWithReplace,
+        rules::ReplaceRule,
     };
 
     #[test]
@@ -376,7 +386,7 @@ mod tests {
             &css_file_data,
             &Url::parse("https://localhost").unwrap(),
             &NullLogger,
-            &RuleWithReplace::with_default(LogLevel::Warn),
+            &ReplaceRule::with_default(LogLevel::Warn),
         )
         .unwrap();
         assert!(clean_css.contains("url(\"\")"));
