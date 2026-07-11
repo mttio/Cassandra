@@ -144,12 +144,11 @@ impl CrawlSession {
                 fetched.data
             }
         } else if is_pdf {
-            if let Err(e) = crate::resources::scan_pdf_for_active_content(&fetched.data) {
-                self.policy
-                    .resources
-                    .pdf_active_content
-                    .handle(&self.logger, e)?;
-            }
+            crate::resources::pdf::sanitize(
+                &fetched.data,
+                &self.logger,
+                self.policy.resources.pdf_active_content,
+            )?;
 
             fetched.data
         } else {
@@ -221,12 +220,11 @@ impl CrawlSession {
         let output_path = self.output_dir.join(format!("{}.pdf", self.index()));
         let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
 
-        if let Err(e) = crate::resources::scan_pdf_for_active_content(&data) {
-            self.policy
-                .resources
-                .pdf_active_content
-                .handle(&self.logger, e)?;
-        }
+        crate::resources::pdf::sanitize(
+            &data,
+            &self.logger,
+            self.policy.resources.pdf_active_content,
+        )?;
 
         fs::write(&output_path, &data).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
 
