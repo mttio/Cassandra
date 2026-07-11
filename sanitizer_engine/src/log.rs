@@ -9,6 +9,7 @@ use itertools::Itertools;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::InputSource;
 use crate::errors::SanitizerMessage;
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -127,12 +128,17 @@ pub fn logging_thread(
     output: &Path,
     console_level: LogLevel,
     file_level: LogLevel,
-    max_size: usize,
+    sources: &[InputSource],
     channel: Receiver<LoggerMessage>,
 ) -> bool {
+    use crate::errors::{SanitizationReport, SanitizerError, SanitizerMessage};
+
+    let max_size = sources.len();
     let mut files = (0..max_size)
         .map(|i| File::create(output.join(format!("{i}.log"))).ok())
         .collect_vec();
+
+    let mut sources = sources.iter().map(|x| (x, Vec::new())).collect_vec();
 
     let width = (max_size as f64).log10().ceil() as usize;
     let mut has_errors = false;
@@ -141,6 +147,7 @@ pub fn logging_thread(
         if msg.level == LogLevel::Error {
             has_errors = true;
         }
+
         let error = msg.message.to_string();
 
         if msg.level >= console_level {
@@ -178,7 +185,33 @@ pub fn logging_thread(
                 strip_ansi_escapes::strip_str(&error),
             );
         }
+
+        // Collect sanitization action events if the message contains one
+        if let SanitizerMessage::Error(SanitizerError::Rule(err)) = msg.message
+            && let Some((_, report)) = sources.get_mut(msg.source)
+        {
+            report.push(err);
+        }
     }
+
+    // Emit machine-readable JSON reports
+    for (i, (source, errors)) in sources.into_iter().enumerate() {
+        let report_path = output.join(format!("{i}.json"));
+        let input_source_str = match source {
+            InputSource::File(p) => p.to_string_lossy().to_string(),
+            InputSource::Url(u) => u.to_string(),
+        };
+
+        let report = SanitizationReport {
+            input: input_source_str,
+            actions: errors,
+        };
+
+        if let Ok(file) = File::create(&report_path) {
+            let _ = serde_json::to_writer_pretty(file, &report);
+        }
+    }
+
     has_errors
 }
 
@@ -189,6 +222,7 @@ mod tests {
     use crate::http_client::SanitizerHttpClient;
     use crate::policy::Policy;
     use parking_lot::Mutex;
+    use std::assert_matches;
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
@@ -235,5 +269,51 @@ mod tests {
         let msg = rx.try_recv().expect("Expected a log message");
         let err_str = msg.message.to_string();
         assert!(err_str.contains("custom XML entity declaration detected"));
+    }
+
+    #[test]
+    fn test_sanitization_report_generation() {
+        use crate::errors::{RuleError, SanitizationReport};
+        use std::path::PathBuf;
+
+        let err = RuleError::BlockedScript {
+            original: "evil_script()".to_owned(),
+            offset: 10..20,
+        };
+        // let event = err.to_event();
+        // assert_eq!(event.rule, "allow_scripts");
+        // assert_eq!(event.original, "evil_script()");
+        // assert_eq!(event.offset, Some(10..20));
+
+        let temp_dir = std::env::temp_dir();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        // Send a message on the channel
+        tx.send(LoggerMessage {
+            source: 0,
+            level: LogLevel::Error,
+            message: err.into(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let sources = vec![InputSource::File(PathBuf::from("test_input.html"))];
+        let has_errors = logging_thread(&temp_dir, LogLevel::Error, LogLevel::Error, &sources, rx);
+        assert!(has_errors);
+
+        // Check if the report file was created
+        let report_path = temp_dir.join("0.json");
+        assert!(report_path.exists());
+
+        // Read and parse report
+        let content = std::fs::read_to_string(&report_path).unwrap();
+        let report: SanitizationReport = serde_json::from_str(&content).unwrap();
+        assert_eq!(report.input, "test_input.html");
+        assert_eq!(report.actions.len(), 1);
+        assert_matches!(report.actions[0], RuleError::BlockedScript { .. });
+
+        // Cleanup
+        let _ = std::fs::remove_file(report_path);
+        let _ = std::fs::remove_file(temp_dir.join("0.log"));
     }
 }

@@ -3,7 +3,7 @@ use url::Url;
 use crate::{
     errors::SanitizerError,
     log::Log,
-    rules::{CssUrl, RuleWithReplace},
+    rules::{CssUrl, ReplaceRule},
 };
 
 /// Scans CSS content for @import and url(...) references, validates/rewrites them, and extracts them.
@@ -20,7 +20,7 @@ pub fn sanitize(
     css: &str,
     base_url: &Url,
     logger: &impl Log,
-    rule: &RuleWithReplace<CssUrl>,
+    rule: &ReplaceRule<CssUrl>,
 ) -> Result<(String, Vec<(Url, String)>), SanitizerError> {
     let mut output = String::new();
     let mut extracted = Vec::new();
@@ -163,7 +163,7 @@ mod tests {
             css,
             &base_url,
             &NullLogger,
-            &RuleWithReplace::with_default(LogLevel::Warn),
+            &ReplaceRule::with_default(LogLevel::Warn),
         )
         .unwrap();
 
@@ -188,7 +188,7 @@ mod tests {
             css,
             &base_url,
             &NullLogger,
-            &RuleWithReplace::with_default(LogLevel::Warn),
+            &ReplaceRule::with_default(LogLevel::Warn),
         )
         .unwrap();
         assert!(rewritten.contains("url(\"\")"));

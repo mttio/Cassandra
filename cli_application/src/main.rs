@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use clap::{ArgAction, Parser};
 use colored::Colorize;
 use std::fs::{self};
-use web_sanitizer_sysprog::engine_structs::InputSource;
+use web_sanitizer_sysprog::InputSource;
 use web_sanitizer_sysprog::log::{LogLevel, logging_thread};
 use web_sanitizer_sysprog::policy::Policy;
 
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use url::Url;
 use walkdir::WalkDir;
 
-const DEFAULT_POLICY: &str = include_str!("../policies/default.toml");
+const DEFAULT_POLICY: &str = include_str!("../../policies/default.toml");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
@@ -244,8 +244,6 @@ pub fn run(args: Args) -> Result<bool> {
         .enable_io()
         .build()?;
     let output_dir = Arc::new(args.output_dir);
-    let max_size = sources.len();
-
     // Step 3: Run and log
     println!(
         "{}",
@@ -255,7 +253,7 @@ pub fn run(args: Args) -> Result<bool> {
     );
     let library_result = web_sanitizer_sysprog::library(
         &runtime,
-        sources,
+        sources.clone(),
         Arc::clone(&policy),
         Arc::clone(&output_dir),
         tx,
@@ -264,7 +262,7 @@ pub fn run(args: Args) -> Result<bool> {
     match library_result {
         Ok(_) => {
             let has_errors =
-                logging_thread(&output_dir, logging_level, LogLevel::Error, max_size, rx);
+                logging_thread(&output_dir, logging_level, LogLevel::Error, &sources, rx);
             if has_errors {
                 println!("\n{}", "[-] Execution complete with policy blocks/errors. Checked files have been processed.".red().bold());
                 Ok(false)

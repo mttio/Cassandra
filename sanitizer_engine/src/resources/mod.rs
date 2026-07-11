@@ -2,7 +2,7 @@ pub mod css;
 pub mod javascript;
 pub mod mime;
 
-use crate::errors::SanitizerError;
+use crate::errors::{RuleError, SanitizerError};
 use url::Url;
 
 /// Helper to generate a unique local filename deterministic for a URL.
@@ -172,29 +172,37 @@ pub fn scan_pdf_for_active_content(data: &[u8]) -> Result<(), SanitizerError> {
             if i + 3 <= data.len() && &data[i..i + 3] == b"/JS" {
                 let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent(
-                        "JavaScript (/JS)".to_string(),
-                    ));
+                    return Err(RuleError::ActiveContent {
+                        original: "JavaScript (/JS)".to_string(),
+                    }
+                    .into());
                 }
             }
             if i + 11 <= data.len() && &data[i..i + 11] == b"/JavaScript" {
                 let next_char = if i + 11 < data.len() { data[i + 11] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent("JavaScript".to_string()));
+                    return Err(RuleError::ActiveContent {
+                        original: "JavaScript".to_string(),
+                    }
+                    .into());
                 }
             }
             if i + 3 <= data.len() && &data[i..i + 3] == b"/AA" {
                 let next_char = if i + 3 < data.len() { data[i + 3] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent(
-                        "Additional Action (/AA)".to_string(),
-                    ));
+                    return Err(RuleError::ActiveContent {
+                        original: "Additional Action (/AA)".to_string(),
+                    }
+                    .into());
                 }
             }
             if i + 11 <= data.len() && &data[i..i + 11] == b"/OpenAction" {
                 let next_char = if i + 11 < data.len() { data[i + 11] } else { 0 };
                 if is_pdf_delimiter(next_char) {
-                    return Err(SanitizerError::ActiveContent("OpenAction".to_string()));
+                    return Err(RuleError::ActiveContent {
+                        original: "OpenAction".to_string(),
+                    }
+                    .into());
                 }
             }
         }
@@ -266,7 +274,7 @@ mod tests {
     use super::*;
     use crate::{
         log::{LogLevel, NullLogger},
-        rules::RuleWithReplace,
+        rules::ReplaceRule,
     };
 
     #[test]
@@ -364,27 +372,27 @@ mod tests {
         assert!(scan_pdf_for_active_content(fake_stream).is_err());
 
         // Files on disk
-        let clean_file_data = std::fs::read("input_test_files/benign/clean_doc.pdf").unwrap();
+        let clean_file_data = std::fs::read("../input_test_files/benign/clean_doc.pdf").unwrap();
         assert!(scan_pdf_for_active_content(&clean_file_data).is_ok());
 
         let malicious_file_data =
-            std::fs::read("input_test_files/malicious/pdf_js_bomb.pdf").unwrap();
+            std::fs::read("../input_test_files/malicious/pdf_js_bomb.pdf").unwrap();
         assert!(scan_pdf_for_active_content(&malicious_file_data).is_err());
 
         // CSS and JS disk file validation checks
         let css_file_data =
-            std::fs::read_to_string("input_test_files/malicious/dangerous_styles.css").unwrap();
+            std::fs::read_to_string("../input_test_files/malicious/dangerous_styles.css").unwrap();
         let (clean_css, _) = crate::resources::css::sanitize(
             &css_file_data,
             &Url::parse("https://localhost").unwrap(),
             &NullLogger,
-            &RuleWithReplace::with_default(LogLevel::Warn),
+            &ReplaceRule::with_default(LogLevel::Warn),
         )
         .unwrap();
         assert!(clean_css.contains("url(\"\")"));
 
         let js_file_data =
-            std::fs::read_to_string("input_test_files/malicious/dangerous_script.js").unwrap();
+            std::fs::read_to_string("../input_test_files/malicious/dangerous_script.js").unwrap();
         assert!(javascript::sanitize(&js_file_data).is_err());
     }
 }

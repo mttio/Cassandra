@@ -1,5 +1,5 @@
-use crate::engine_structs::{FetchedContent, InputSource};
-use crate::errors::SanitizerError;
+use crate::FetchedContent;
+use crate::errors::{RuleError, SanitizerError};
 use crate::html::{CrawlerState, create_rewriter};
 use crate::log::{Log, LoggerMessage};
 use crate::policy::Policy;
@@ -187,13 +187,10 @@ impl SanitizerHttpClient {
                 let check = || -> Result<(), SanitizerError> {
                     policy.urls.idn.check(attempt.url(), &logger)?;
 
-                    let max_redirects = policy.connections.max_redirects;
-                    if attempt.previous().len() == max_redirects.value + 1 {
-                        max_redirects.handle(
-                            &logger,
-                            SanitizerError::TooManyRedirects(max_redirects.value),
-                        )?;
-                    }
+                    policy
+                        .connections
+                        .max_redirects
+                        .check(attempt.previous().len(), &logger)?;
 
                     if let Some(host) = attempt.url().host().map(|x| x.to_owned()) {
                         dangerous_domain_action
@@ -229,9 +226,9 @@ impl SanitizerHttpClient {
     pub async fn fetch_raw(
         &self,
         url: &Url,
-        _logger: &impl Log,
-        _policy: &Policy,
-        remaining_bytes: usize,
+        logger: &impl Log,
+        policy: &Policy,
+        current_bytes: usize,
     ) -> Result<FetchedContent, SanitizerError> {
         if url.scheme() != "https" {
             return Err(SanitizerError::NonHttpsUrl);
@@ -254,9 +251,11 @@ impl SanitizerHttpClient {
             .get(header::CONTENT_LENGTH)
             .and_then(|x| x.to_str().ok())
             .and_then(|x| x.parse::<usize>().ok())
-            && length > remaining_bytes
         {
-            return Err(SanitizerError::ContentTooLong(remaining_bytes));
+            policy
+                .resources
+                .max_bytes
+                .check(length + current_bytes, logger)?;
         }
 
         let content_type = response
@@ -281,26 +280,21 @@ impl SanitizerHttpClient {
 
         let mut stream = response.bytes_stream();
         let mut data = Vec::new();
-        let mut length = 0;
+        let mut length = current_bytes;
         let mut entity_scanner = crate::resources::EntityScanner::new();
 
         while let Some(item) = stream.next().await {
             let chunk = item.map_err(SanitizerError::Streaming)?;
             length += chunk.len();
-            if length > remaining_bytes {
-                return Err(SanitizerError::ContentTooLong(remaining_bytes));
-            }
+            policy.resources.max_bytes.check(length, logger)?;
+
             if is_xml_html_svg && entity_scanner.feed_chunk(&chunk) {
-                return Err(SanitizerError::XmlEntityDeclaration);
+                return Err(RuleError::XmlEntityDeclaration.into());
             }
             data.extend_from_slice(&chunk);
         }
 
-        Ok(FetchedContent {
-            source: InputSource::Url(url.clone()),
-            data,
-            content_type,
-        })
+        Ok(FetchedContent { data, content_type })
     }
 
     /// Fetch a single HTML URL, sanitize/rewrite it, and collect discovered subresources.
@@ -332,18 +326,14 @@ impl SanitizerHttpClient {
             return Err(SanitizerError::ServerStatus(response.status()));
         }
 
-        let max_bytes = policy.resources.max_bytes;
-
         // Fast-fail for `Content-Length` header
         if let Some(length) = response
             .headers()
             .get(header::CONTENT_LENGTH)
             .and_then(|x| x.to_str().ok())
             .and_then(|x| x.parse::<usize>().ok())
-            && length > max_bytes.value
         {
-            let _ = max_bytes.handle(logger, SanitizerError::ContentTooLong(max_bytes.value));
-            return Err(SanitizerError::ContentTooLong(max_bytes.value));
+            policy.resources.max_bytes.check(length, logger)?;
         }
 
         let content_type = response
@@ -355,10 +345,11 @@ impl SanitizerHttpClient {
         if let Some(content_type) = content_type
             && !content_type.contains("text/html")
         {
-            return Err(SanitizerError::MimeMismatch(
-                Some("text/html".to_owned()),
-                Some(content_type),
-            ));
+            return Err(RuleError::MimeMismatch {
+                expected: Some("text/html".to_owned()),
+                actual: Some(content_type),
+            }
+            .into());
         }
 
         let mut stream = response.bytes_stream();
@@ -382,17 +373,16 @@ impl SanitizerHttpClient {
             let chunk = item.map_err(SanitizerError::Streaming)?;
 
             total_bytes += chunk.len();
-            if total_bytes > max_bytes.value {
+            if let Err(e) = policy.resources.max_bytes.check(total_bytes, logger) {
                 drop(rewriter);
                 let _ = std::fs::remove_file(output_path);
-                let _ = max_bytes.handle(logger, SanitizerError::ContentTooLong(max_bytes.value));
-                return Err(SanitizerError::ContentTooLong(max_bytes.value));
+                return Err(e.into());
             }
 
             if entity_scanner.feed_chunk(&chunk) {
                 drop(rewriter);
                 let _ = std::fs::remove_file(output_path);
-                return Err(SanitizerError::XmlEntityDeclaration);
+                return Err(RuleError::XmlEntityDeclaration.into());
             }
 
             rewriter.write(&chunk)?;

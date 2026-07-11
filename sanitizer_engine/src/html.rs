@@ -8,7 +8,12 @@ use parking_lot::Mutex;
 use std::{io::Write, ops::Range, sync::Arc};
 use url::Url;
 
-use crate::{errors::SanitizerError, log::Log, policy::Policy};
+use crate::{
+    errors::{RuleError, SanitizerError},
+    log::Log,
+    policy::Policy,
+    url::host_matches,
+};
 
 fn handle_dangerous_link_2(
     value: &str,
@@ -27,25 +32,41 @@ fn handle_dangerous_link_2(
     {
         if let Some(host) = resolved.host() {
             // Check IDN
-            if let Some(r) = policy.urls.idn.check(&resolved, logger)? {
-                replace(&r);
+            match policy.urls.idn.check(&resolved, logger) {
+                Ok(Some(r)) => {
+                    replace(&r);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    logger.error(e);
+                    replace("");
+                    return Ok(None);
+                }
             }
 
             let host = host.to_owned();
 
-            if let Some(x) = policy
+            match policy
                 .html
                 .dangerous_domain
-                .check((&host, &policy.urls.dangerous_domains, location), logger)?
+                .check((&host, &policy.urls.dangerous_domains, location), logger)
             {
-                let new = match resolved.set_host(Some(x.as_ref())) {
-                    // If policy value is a valid host, replace the host of the old url
-                    Ok(_) => resolved.as_ref(),
-                    // Otherwise replace the whole url with the policy value
-                    Err(_) => &x,
-                };
+                Ok(Some(x)) => {
+                    let new = match resolved.set_host(Some(x.as_ref())) {
+                        // If policy value is a valid host, replace the host of the old url
+                        Ok(_) => resolved.as_ref(),
+                        // Otherwise replace the whole url with the policy value
+                        Err(_) => &x,
+                    };
 
-                replace(new)
+                    replace(new)
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    logger.error(e);
+                    replace("");
+                    return Ok(None);
+                }
             }
         }
 
@@ -85,7 +106,7 @@ fn handle_dangerous_link(
             base_url,
             policy,
             logger,
-            |x| replace_attribute(&crate::policy::sanitize_attribute(x), attr_name, el),
+            |x| replace_attribute(&crate::rules::sanitize_attribute(x), attr_name, el),
         )?)
     } else {
         Ok(None)
@@ -155,7 +176,8 @@ pub fn create_rewriter<'a, W: Write>(
             replace_attribute(&value, &name, el);
         }
 
-        match el.tag_name().as_str() {
+        let tag = el.tag_name();
+        match tag.as_str() {
             "base" => {
                 if let Some(href) = el.get_attribute("href")
                     && let Ok(new_base) = state.base.join(&href)
@@ -216,8 +238,64 @@ pub fn create_rewriter<'a, W: Write>(
                     state.subresources.push((resolved, local_name));
                 }
             }
+            "form" => {
+                handle_dangerous_link(el, "action", &state.base, policy, logger)?;
+            }
+            "area" => {
+                handle_dangerous_link(el, "href", &state.base, policy, logger)?;
+            }
+            "audio" => {
+                if let Some(resolved) =
+                    handle_dangerous_link(el, "src", &state.base, policy, logger)?
+                    && policy.resources.fetch_sub_resources
+                {
+                    let local_name = crate::resources::generate_local_filename(&resolved, "mp3");
+                    el.set_attribute("src", &local_name)?;
+                    state.subresources.push((resolved, local_name));
+                }
+            }
+            "video" => {
+                if let Some(resolved) =
+                    handle_dangerous_link(el, "src", &state.base, policy, logger)?
+                    && policy.resources.fetch_sub_resources
+                {
+                    let local_name = crate::resources::generate_local_filename(&resolved, "mp4");
+                    el.set_attribute("src", &local_name)?;
+                    state.subresources.push((resolved, local_name));
+                }
+            }
+            "embed" => {
+                if let Some(resolved) =
+                    handle_dangerous_link(el, "src", &state.base, policy, logger)?
+                    && policy.resources.fetch_sub_resources
+                {
+                    let local_name = crate::resources::generate_local_filename(&resolved, "bin");
+                    el.set_attribute("src", &local_name)?;
+                    state.subresources.push((resolved, local_name));
+                }
+            }
+            "track" => {
+                if let Some(resolved) =
+                    handle_dangerous_link(el, "src", &state.base, policy, logger)?
+                    && policy.resources.fetch_sub_resources
+                {
+                    let local_name = crate::resources::generate_local_filename(&resolved, "vtt");
+                    el.set_attribute("src", &local_name)?;
+                    state.subresources.push((resolved, local_name));
+                }
+            }
+            "input" => {
+                if let Some(resolved) =
+                    handle_dangerous_link(el, "src", &state.base, policy, logger)?
+                    && policy.resources.fetch_sub_resources
+                {
+                    let local_name = crate::resources::generate_local_filename(&resolved, "png");
+                    el.set_attribute("src", &local_name)?;
+                    state.subresources.push((resolved, local_name));
+                }
+            }
             "script" => {
-                let location = el.source_location();
+                let location = el.source_location().bytes();
 
                 if let Some(resolved) =
                     handle_dangerous_link(el, "src", &state.base, policy, logger)?
@@ -232,10 +310,10 @@ pub fn create_rewriter<'a, W: Write>(
                     };
 
                     if !host_matched {
-                        logger.error(SanitizerError::BlockedScript(
-                            resolved.to_string(),
-                            location.bytes(),
-                        ));
+                        logger.error(RuleError::BlockedScript {
+                            original: resolved.to_string(),
+                            offset: location,
+                        });
                         el.remove();
                         return Ok(());
                     }
@@ -248,35 +326,77 @@ pub fn create_rewriter<'a, W: Write>(
                     }
                 } else {
                     if let Some(src) = el.get_attribute("src") {
-                        logger.error(SanitizerError::BlockedScript(src.clone(), location.bytes()));
+                        logger.error(RuleError::BlockedScript {
+                            original: src.clone(),
+                            offset: location,
+                        });
                         el.remove();
                     }
                 }
             }
             "iframe" => {
-                handle_dangerous_link(el, "src", &state.base, policy, logger)?;
+                let location = el.source_location().bytes();
+                if let Some(resolved) =
+                    handle_dangerous_link(el, "src", &state.base, policy, logger)?
+                {
+                    let host_matched = if let Some(host) = resolved.host().map(|x| x.to_owned()) {
+                        policy
+                            .html
+                            .allow_origins
+                            .iter()
+                            .any(|allowed| host_matches(&host, &allowed.0))
+                    } else {
+                        false
+                    };
+
+                    if !host_matched {
+                        logger.error(RuleError::BlockedOrigin {
+                            tag,
+                            original: resolved.to_string(),
+                            offset: location,
+                        });
+                        el.remove();
+                        return Ok(());
+                    }
+                }
             }
             "object" => {
-                handle_dangerous_link(el, "data", &state.base, policy, logger)?;
+                let location = el.source_location().bytes();
+                if let Some(resolved) =
+                    handle_dangerous_link(el, "data", &state.base, policy, logger)?
+                {
+                    let host_matched = if let Some(host) = resolved.host().map(|x| x.to_owned()) {
+                        policy
+                            .html
+                            .allow_origins
+                            .iter()
+                            .any(|allowed| host_matches(&host, &allowed.0))
+                    } else {
+                        false
+                    };
+
+                    if !host_matched {
+                        logger.error(RuleError::BlockedOrigin {
+                            tag,
+                            original: resolved.to_string(),
+                            offset: location,
+                        });
+                        el.remove();
+                        return Ok(());
+                    }
+                }
             }
             "meta" => {
                 if let Some(http_equiv) = el.get_attribute("http-equiv")
                     && http_equiv.to_lowercase() == "refresh"
-                    && let Some(content) = el.get_attribute("content")
-                    && let Some((time, url)) = content.split_once(";url=")
                 {
+                    let content = el.get_attribute("content").unwrap_or_default();
                     let location = el.source_location().bytes();
-                    handle_dangerous_link_2(url, location, &state.base, policy, logger, |x| {
-                        // SAFETY: we removed all invalid characters
-                        let _ = el.set_attribute(
-                            "content",
-                            &crate::policy::sanitize_attribute(&if x.is_empty() {
-                                time.to_owned()
-                            } else {
-                                format!("{time};url={}", x)
-                            }),
-                        );
-                    })?;
+                    logger.error(RuleError::BlockedMetaRefresh {
+                        original: content,
+                        offset: location,
+                    });
+                    el.remove();
                 }
             }
             _ => {}
@@ -316,10 +436,10 @@ pub fn create_rewriter<'a, W: Write>(
                 let start = inline_script_location.unwrap_or(0);
                 let end = t.source_location().bytes().end;
 
-                logger.error(SanitizerError::BlockedScript(
-                    "<inline>".to_owned(),
-                    start..end,
-                ));
+                logger.error(RuleError::BlockedScript {
+                    original: "<inline>".to_owned(),
+                    offset: start..end,
+                });
             }
             inline_script.clear();
             inline_script_location = None;
@@ -364,8 +484,7 @@ mod tests {
     use super::*;
     use crate::{
         log::{LogLevel, NullLogger},
-        policy::{DangerousUriRule, EventHandlerRule},
-        rules::RuleWithReplace,
+        rules::{self, ReplaceRule},
     };
 
     #[test]
@@ -393,8 +512,10 @@ mod tests {
     #[test]
     fn test_event_handler_replacement() {
         let mut policy = Policy::default();
-        policy.html.event_handlers =
-            RuleWithReplace::new(EventHandlerRule::new("alert('blocked')"), LogLevel::Info);
+        policy.html.event_handlers = ReplaceRule::new(
+            rules::EventHandlers::new("alert('blocked')"),
+            LogLevel::Info,
+        );
 
         let input_html = b"<button onclick=\"alert(1)\"></button>";
         let mut output = Vec::new();
@@ -414,7 +535,7 @@ mod tests {
     #[test]
     fn test_event_handler_ignore() {
         let mut policy = Policy::default();
-        policy.html.event_handlers = RuleWithReplace::keep(LogLevel::Trace);
+        policy.html.event_handlers = ReplaceRule::keep(LogLevel::Trace);
 
         let input_html = b"<button onclick=\"alert(1)\"></button>";
         let mut output = Vec::new();
@@ -515,7 +636,7 @@ mod tests {
     #[test]
     fn test_dangerous_uris_sanitization() {
         let mut policy = Policy::default();
-        policy.html.dangerous_uris = RuleWithReplace::with_default(LogLevel::Info);
+        policy.html.dangerous_uris = ReplaceRule::with_default(LogLevel::Info);
 
         let input_html = b"<a href=\"javascript:alert(1)\" src=\"  data:text/html,malicious  \" data-url=\"other\">link</a>";
         let mut output = Vec::new();
@@ -538,7 +659,7 @@ mod tests {
     fn test_dangerous_uris_bypass_whitespace() {
         let mut policy = Policy::default();
         policy.html.dangerous_uris =
-            RuleWithReplace::new(DangerousUriRule::new(""), LogLevel::Info);
+            ReplaceRule::new(rules::DangerousUris::new(""), LogLevel::Info);
 
         let input_html = b"<a href=\"\n\t javascript:alert(1)\">link</a>";
         let mut output = Vec::new();
@@ -559,7 +680,7 @@ mod tests {
     #[test]
     fn test_dangerous_uris_ignore() {
         let mut policy = Policy::default();
-        policy.html.dangerous_uris = RuleWithReplace::keep(LogLevel::Trace);
+        policy.html.dangerous_uris = ReplaceRule::keep(LogLevel::Trace);
 
         let input_html = b"<a href=\"javascript:alert(1)\">link</a>";
         let mut output = Vec::new();
@@ -580,7 +701,7 @@ mod tests {
     fn test_idn_rewriting() {
         // Case 1: IDN is Warn. It should preserve the link.
         let mut policy = Policy::default();
-        policy.urls.idn = RuleWithReplace::keep(LogLevel::Warn);
+        policy.urls.idn = ReplaceRule::keep(LogLevel::Warn);
         policy.resources.fetch_sub_resources = false;
 
         let mut crawler_state = CrawlerState {
@@ -604,7 +725,7 @@ mod tests {
         );
 
         // Case 2: IDN is Warn with rewriting enabled. It should rewrite to "#".
-        policy.urls.idn = RuleWithReplace::with_default(LogLevel::Warn);
+        policy.urls.idn = ReplaceRule::with_default(LogLevel::Warn);
         let mut output2 = Vec::new();
         {
             let mut rewriter =
@@ -616,5 +737,125 @@ mod tests {
         }
         let out_str2 = String::from_utf8(output2).unwrap();
         assert!(out_str2.contains("href=\"#\""));
+    }
+
+    #[test]
+    fn test_iframe_object_origin_filtering() {
+        let mut policy = Policy::default();
+        // policy.html.allow_origins defaults to ["trusted.com"]
+        policy.resources.fetch_sub_resources = false;
+
+        let input_html = b"<div>\
+            <iframe src=\"https://trusted.com/page.html\"></iframe>\
+            <iframe src=\"https://untrusted.com/page.html\"></iframe>\
+            <object data=\"https://trusted.com/data.bin\"></object>\
+            <object data=\"https://untrusted.com/data.bin\"></object>\
+        </div>";
+
+        let mut output = Vec::new();
+        let mut state = CrawlerState {
+            base: Url::parse("https://localhost").unwrap(),
+            subresources: Vec::new(),
+        };
+
+        let mut rewriter = create_rewriter(&NullLogger, &policy, &mut state, &mut output);
+        rewriter.write(input_html).unwrap();
+        rewriter.end().unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("src=\"https://trusted.com/page.html\""));
+        assert!(!result.contains("src=\"https://untrusted.com/page.html\""));
+        assert!(!result.contains("<iframe src=\"https://untrusted.com"));
+        assert!(result.contains("data=\"https://trusted.com/data.bin\""));
+        assert!(!result.contains("data=\"https://untrusted.com/data.bin\""));
+        assert!(!result.contains("<object data=\"https://untrusted.com"));
+    }
+
+    #[test]
+    fn test_meta_refresh_removal() {
+        let policy = Policy::default();
+        let input_html = b"<html>\
+            <head>\
+                <meta charset=\"utf-8\">\
+                <meta http-equiv=\"refresh\" content=\"5;url=https://trusted.com\">\
+            </head>\
+        </html>";
+
+        let mut output = Vec::new();
+        let mut state = CrawlerState {
+            base: Url::parse("https://localhost").unwrap(),
+            subresources: Vec::new(),
+        };
+
+        let mut rewriter = create_rewriter(&NullLogger, &policy, &mut state, &mut output);
+        rewriter.write(input_html).unwrap();
+        rewriter.end().unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("charset=\"utf-8\""));
+        assert!(!result.contains("http-equiv=\"refresh\""));
+    }
+
+    #[test]
+    fn test_broadened_url_extraction() {
+        let mut policy = Policy::default();
+        policy.resources.fetch_sub_resources = true;
+
+        let input_html = b"<div>\
+            <form action=\"https://trusted.com/submit\"></form>\
+            <area href=\"https://trusted.com/map\"></area>\
+            <audio src=\"https://trusted.com/song.mp3\"></audio>\
+            <video src=\"https://trusted.com/movie.mp4\"></video>\
+            <embed src=\"https://trusted.com/app.swf\"></embed>\
+            <track src=\"https://trusted.com/sub.vtt\"></track>\
+            <input src=\"https://trusted.com/btn.png\"></input>\
+        </div>";
+
+        let mut output = Vec::new();
+        let mut state = CrawlerState {
+            base: Url::parse("https://localhost").unwrap(),
+            subresources: Vec::new(),
+        };
+
+        let mut rewriter = create_rewriter(&NullLogger, &policy, &mut state, &mut output);
+        rewriter.write(input_html).unwrap();
+        rewriter.end().unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        // form and area are NOT sub-resources, so they should keep their original/resolved URLs
+        assert!(result.contains("action=\"https://trusted.com/submit\""));
+        assert!(result.contains("href=\"https://trusted.com/map\""));
+
+        // audio, video, embed, track, input ARE sub-resources, so they should be rewritten to local names
+        assert!(result.contains("src=\"sub_"));
+        assert_eq!(state.subresources.len(), 5);
+    }
+
+    #[test]
+    fn test_flexible_action_handling_deny_remove() {
+        let policy = Policy::default();
+        // default dangerous_domain is Error, which should trigger Deny/Remove
+        // allow_origins contains trusted.com
+        let input_html = b"<div>\
+            <a href=\"https://evil.com/malicious\">Link</a>\
+            <form action=\"https://evil.com/submit\"></form>\
+        </div>";
+
+        let mut output = Vec::new();
+        let mut state = CrawlerState {
+            base: Url::parse("https://localhost").unwrap(),
+            subresources: Vec::new(),
+        };
+
+        let mut rewriter = create_rewriter(&NullLogger, &policy, &mut state, &mut output);
+        rewriter.write(input_html).unwrap();
+        rewriter.end().unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+        // Both the anchor href and form action point to a dangerous domain.
+        // Under Error level, flexible action handling should strip/blank these attributes rather than aborting.
+        assert!(!result.contains("evil.com"));
+        assert!(!result.contains("href="));
+        assert!(!result.contains("action="));
     }
 }

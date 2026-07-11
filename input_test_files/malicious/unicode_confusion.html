@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Unicode Confusion Test</title>
+</head>
+<body>
+    <h1>Unicode URL Normalization/Confusion</h1>
+    <!-- Host split attempt via @ or unicode variation -->
+    <a href="http://google.com＠attacker.com">Host Split</a>
+    <!-- Zero width space in domain -->
+    <a href="http://googl​e.com">Zero-width space</a>
+</body>
+</html>

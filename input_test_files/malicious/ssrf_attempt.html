@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SSRF Attempt Test</title>
+</head>
+<body>
+    <h1>SSRF Block Check</h1>
+    <!-- SSRF attempting to access loopback or private network -->
+    <img src="http://127.0.0.1:8080/admin/delete" alt="SSRF">
+    <script src="http://192.168.1.1/config.js"></script>
+    <iframe src="http://10.0.0.1/metadata"></iframe>
+</body>
+</html>
