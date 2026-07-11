@@ -3,10 +3,6 @@ allow_scripts = []
 allow_origins = ["trusted.com"]
 event_handlers = "info"
 
-# [html.dangerous_domain]
-# level = "info"
-# replace = "#"
-
 [urls]
 dangerous_domains = [
   "malicious-domain.com",
@@ -28,4 +24,4 @@ max_redirects = {
   level = "error"
 }
 user_agent = "CoolBot/0.0 (https://example.org/coolbot/; coolbot@example.org) generic-library/0.0"
-dangerous_domain = { replace = false, level = "error" }
+dangerous_domain = "error"

@@ -291,7 +291,7 @@ impl<R: Default + Verify2> RuleWithValue<R> {
     }
 }
 
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for RuleWithValue<T> {
+impl<'de, T: Default + Deserialize<'de>> Deserialize<'de> for RuleWithValue<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -300,6 +300,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for RuleWithValue<T> {
         #[serde(untagged)]
         enum Inner<T> {
             Value(T),
+            Level(LogLevel),
             Tuple(T, LogLevel),
             Table { value: T, level: LogLevel },
         }
@@ -308,6 +309,10 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for RuleWithValue<T> {
             Inner::Value(value) => Self {
                 value,
                 level: LogLevel::Error,
+            },
+            Inner::Level(level) => Self {
+                value: T::default(),
+                level,
             },
             Inner::Tuple(value, level) => Self { value, level },
             Inner::Table { value, level } => Self { value, level },
