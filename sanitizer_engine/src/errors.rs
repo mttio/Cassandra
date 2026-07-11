@@ -95,6 +95,8 @@ pub enum RuleError {
     #[error("embedded active content ({original}) detected")]
     #[serde(rename = "active_content")]
     ActiveContent { original: String },
+    #[error("Unknown resource type {mime:?}, {path}")]
+    UnknownResourceType { mime: Option<String>, path: String },
     #[error(
         "{inner}{}",
         match replacement {
@@ -163,8 +165,6 @@ pub enum SanitizerError {
     ServerStatus(reqwest::StatusCode),
     #[error("Failed to fetch {} {}: {}", if *.2 { "sub-resource" } else { "url" }, .0, .1)]
     UrlFetch(Url, Box<Self>, bool),
-    #[error("Unknown resource type")]
-    UnknownResourceType,
     #[error("Rewriting error: {0}")]
     Rewriting(#[source] RewritingError),
     #[error("Failed to open file: {0} ({1})")]

@@ -8,6 +8,7 @@ use crate::log::ChannelLogger;
 use crate::log::Log;
 use crate::policy::Policy;
 use crate::resources::mime;
+use crate::resources::mime::KnownResourceType;
 use crate::resources::strip_jpeg_metadata;
 use crate::resources::strip_png_metadata;
 
@@ -101,63 +102,68 @@ impl CrawlSession {
                 .handle(&self.logger, err)?;
         }
 
-        let sniffed = sniffed
-            .map(|x| x.to_string())
-            .or(declared)
-            .unwrap_or_default();
-        let is_jpeg = sniffed == "image/jpeg"
-            || url.path().ends_with(".jpg")
-            || url.path().ends_with(".jpeg");
-        let is_png = sniffed == "image/png" || url.path().ends_with(".png");
-        let is_css = sniffed == "text/css" || url.path().ends_with(".css");
-        let is_pdf = sniffed == "application/pdf" || url.path().ends_with(".pdf");
-        let is_js = sniffed == "text/javascript"
-            || sniffed == "application/javascript"
-            || url.path().ends_with(".js");
+        let resource_type = sniffed
+            .or_else(|| declared.as_deref().and_then(KnownResourceType::parse))
+            .or_else(|| {
+                url.path()
+                    .rsplit_once('.')
+                    .map(|(_, x)| x)
+                    .and_then(KnownResourceType::from_extension)
+            });
 
-        let sanitized_data = if is_jpeg {
-            strip_jpeg_metadata(&fetched.data)
-        } else if is_png {
-            strip_png_metadata(&fetched.data)
-        } else if is_css {
-            let css_str = String::from_utf8_lossy(&fetched.data);
-            let (sanitized_css, nested_urls) = crate::resources::css::sanitize(
-                &css_str,
-                &url,
-                &self.logger,
-                &self.policy.resources.dangerous_css,
-            )?;
-            for (n_url, n_local) in nested_urls {
-                self.try_enqueue_subresource(n_url, n_local, depth + 1);
-            }
-            sanitized_css.into_bytes()
-        } else if is_js {
-            let js_str = String::from_utf8_lossy(&fetched.data);
-            if let Some(x) = self
-                .policy
-                .resources
-                .dangerous_js
-                .check(&js_str, &self.logger)?
-            {
-                x.as_bytes().to_vec()
-            } else {
+        let sanitized_data = match resource_type {
+            None => {
+                self.policy.resources.unknown_resource.handle(
+                    &self.logger,
+                    RuleError::UnknownResourceType {
+                        mime: declared,
+                        path: url.path().to_owned(),
+                    },
+                )?;
+
                 fetched.data
             }
-        } else if is_pdf {
-            crate::resources::pdf::sanitize(
-                &fetched.data,
-                &self.logger,
-                self.policy.resources.pdf_active_content,
-            )?;
+            Some(KnownResourceType::Png) => strip_png_metadata(&fetched.data),
+            Some(KnownResourceType::Jpeg) => strip_jpeg_metadata(&fetched.data),
+            Some(KnownResourceType::Gif | KnownResourceType::Webp) => {
+                // TODO: maybe remove metadata for these
+                fetched.data
+            }
+            Some(KnownResourceType::Css) => {
+                let css_str = String::from_utf8_lossy(&fetched.data);
+                let (sanitized_css, nested_urls) = crate::resources::css::sanitize(
+                    &css_str,
+                    &url,
+                    &self.logger,
+                    &self.policy.resources.dangerous_css,
+                )?;
+                for (n_url, n_local) in nested_urls {
+                    self.try_enqueue_subresource(n_url, n_local, depth + 1);
+                }
+                sanitized_css.into_bytes()
+            }
+            Some(KnownResourceType::Js) => {
+                let js_str = String::from_utf8_lossy(&fetched.data);
+                if let Some(x) = self
+                    .policy
+                    .resources
+                    .dangerous_js
+                    .check(&js_str, &self.logger)?
+                {
+                    x.as_bytes().to_vec()
+                } else {
+                    fetched.data
+                }
+            }
+            Some(KnownResourceType::Pdf) => {
+                crate::resources::pdf::sanitize(
+                    &fetched.data,
+                    &self.logger,
+                    self.policy.resources.pdf_active_content,
+                )?;
 
-            fetched.data
-        } else {
-            self.policy
-                .resources
-                .unknown_resource
-                .handle(&self.logger, SanitizerError::UnknownResourceType)?;
-
-            fetched.data
+                fetched.data
+            }
         };
 
         let sub_path = self.output_dir.join(&local_name);
