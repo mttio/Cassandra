@@ -219,6 +219,7 @@ pub fn logging_thread(
 mod tests {
     use super::*;
     use crate::crawl_session::CrawlSession;
+    use crate::errors::RuleReplaceError;
     use crate::http_client::SanitizerHttpClient;
     use crate::policy::Policy;
     use parking_lot::Mutex;
@@ -276,8 +277,8 @@ mod tests {
         use crate::errors::{RuleError, SanitizationReport};
         use std::path::PathBuf;
 
-        let err = RuleError::BlockedScript {
-            original: "evil_script()".to_owned(),
+        let err = RuleReplaceError::DangerousScript {
+            original: Some("evil_script()".to_owned()),
             offset: 10..20,
         };
         // let event = err.to_event();
@@ -292,7 +293,11 @@ mod tests {
         tx.send(LoggerMessage {
             source: 0,
             level: LogLevel::Error,
-            message: err.into(),
+            message: RuleError::Replace {
+                inner: err,
+                replacement: None,
+            }
+            .into(),
         })
         .unwrap();
         drop(tx);
@@ -310,7 +315,13 @@ mod tests {
         let report: SanitizationReport = serde_json::from_str(&content).unwrap();
         assert_eq!(report.input, "test_input.html");
         assert_eq!(report.actions.len(), 1);
-        assert_matches!(report.actions[0], RuleError::BlockedScript { .. });
+        assert_matches!(
+            report.actions[0],
+            RuleError::Replace {
+                inner: RuleReplaceError::DangerousScript { .. },
+                ..
+            }
+        );
 
         // Cleanup
         let _ = std::fs::remove_file(report_path);

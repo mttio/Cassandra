@@ -39,27 +39,9 @@ pub enum RuleError {
     #[error("too many redirects (max = {})", max.pretty())]
     #[serde(rename = "too_many_redirects")]
     TooManyRedirects { max: usize },
-    #[error("blocked script {} (source = {})", format_range(offset), original.pretty())]
-    #[serde(rename = "allow_scripts")]
-    BlockedScript {
-        original: String,
-        offset: Range<usize>,
-    },
     #[error("connecting to dangerous domain ({})", original.pretty())]
     #[serde(rename = "dangerous_domain_connection")]
     DangerousDomainConnection { original: Host },
-    #[error(
-        "blocked origin (tag = {}, source = {}) {}",
-        tag.pretty(),
-        original.pretty(),
-        format_range(offset)
-    )]
-    #[serde(rename = "allow_origin")]
-    BlockedOrigin {
-        tag: String,
-        original: String,
-        offset: Range<usize>,
-    },
     #[error(
         "blocked meta refresh (content = {}) {}",
         original.pretty(),
@@ -119,20 +101,44 @@ pub enum RuleReplaceError {
     #[error("event handler{}: `{}`", format_option_range(offset), original.pretty())]
     #[serde(rename = "event_handlers")]
     EventHandler {
-        original: String,
         offset: Option<Range<usize>>,
+        original: String,
+    },
+    #[error("dangerous script {}: `{}`",
+        format_range(offset),
+        match original {
+            Some(x) => x.pretty(),
+            None => "<inline>".pretty()
+        },
+    )]
+    #[serde(rename = "dangerous_scripts")]
+    DangerousScript {
+        offset: Range<usize>,
+        original: Option<String>,
+    },
+    #[error(
+        "dangerous origin {} (tag = {}): `{}`",
+        format_range(offset),
+        tag.pretty(),
+        original.pretty(),
+    )]
+    #[serde(rename = "dangerous_origins")]
+    DangerousOrigin {
+        tag: String,
+        offset: Range<usize>,
+        original: String,
     },
     #[error("dangerous domain {}: `{}`", format_range(offset), original.pretty())]
     #[serde(rename = "dangerous_domain")]
     DangerousDomain {
-        original: Host,
         offset: Range<usize>,
+        original: Host,
     },
     #[error("dangerous URI{}: `{}`", format_option_range(offset), original.pretty())]
     #[serde(rename = "dangerous_uris")]
     DangerousUri {
-        original: String,
         offset: Option<Range<usize>>,
+        original: String,
     },
     #[error("IDN url: `{}`", original.pretty())]
     #[serde(rename = "idn")]
@@ -146,7 +152,7 @@ pub enum RuleReplaceError {
         original.pretty(),
     )]
     #[serde(rename = "dangerous_css")]
-    DangerousCssConstruct { original: String, offset: usize },
+    DangerousCssConstruct { offset: usize, original: String },
 }
 
 /// An error that the sanitizer can produce

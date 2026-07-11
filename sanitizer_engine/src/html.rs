@@ -12,7 +12,6 @@ use crate::{
     errors::{RuleError, SanitizerError},
     log::Log,
     policy::Policy,
-    url::host_matches,
 };
 
 fn handle_dangerous_link_2(
@@ -300,23 +299,16 @@ pub fn create_rewriter<'a, W: Write>(
                 if let Some(resolved) =
                     handle_dangerous_link(el, "src", &state.base, policy, logger)?
                 {
-                    let host_matched = if let Some(host) = resolved.host() {
+                    if let Some(host) = resolved.host() {
                         let host = host.to_string();
-                        policy.html.allow_scripts.iter().any(|allowed| {
-                            allowed == &host || resolved.as_str().starts_with(allowed)
-                        })
-                    } else {
-                        false
+                        if let Some(replace) = policy
+                            .html
+                            .dangerous_scripts
+                            .check((&host, &policy.html.allow_scripts, location), logger)?
+                        {
+                            replace_attribute(&replace, "src", el);
+                        }
                     };
-
-                    if !host_matched {
-                        logger.error(RuleError::BlockedScript {
-                            original: resolved.to_string(),
-                            offset: location,
-                        });
-                        el.remove();
-                        return Ok(());
-                    }
 
                     if policy.resources.fetch_sub_resources {
                         let local_name = crate::resources::generate_local_filename(&resolved, "js");
@@ -325,12 +317,13 @@ pub fn create_rewriter<'a, W: Write>(
                         state.subresources.push((resolved, local_name));
                     }
                 } else {
-                    if let Some(src) = el.get_attribute("src") {
-                        logger.error(RuleError::BlockedScript {
-                            original: src.clone(),
-                            offset: location,
-                        });
-                        el.remove();
+                    if let Some(src) = el.get_attribute("src")
+                        && let Some(replace) = policy
+                            .html
+                            .dangerous_scripts
+                            .check((&src, &[], location), logger)?
+                    {
+                        replace_attribute(&replace, "src", el);
                     }
                 }
             }
@@ -338,52 +331,24 @@ pub fn create_rewriter<'a, W: Write>(
                 let location = el.source_location().bytes();
                 if let Some(resolved) =
                     handle_dangerous_link(el, "src", &state.base, policy, logger)?
+                    && let Some(replace) = policy.html.dangerous_origins.check(
+                        (&resolved, &policy.html.allow_origins, &tag, location),
+                        logger,
+                    )?
                 {
-                    let host_matched = if let Some(host) = resolved.host().map(|x| x.to_owned()) {
-                        policy
-                            .html
-                            .allow_origins
-                            .iter()
-                            .any(|allowed| host_matches(&host, &allowed.0))
-                    } else {
-                        false
-                    };
-
-                    if !host_matched {
-                        logger.error(RuleError::BlockedOrigin {
-                            tag,
-                            original: resolved.to_string(),
-                            offset: location,
-                        });
-                        el.remove();
-                        return Ok(());
-                    }
+                    replace_attribute(&replace, "src", el);
                 }
             }
             "object" => {
                 let location = el.source_location().bytes();
                 if let Some(resolved) =
                     handle_dangerous_link(el, "data", &state.base, policy, logger)?
+                    && let Some(replace) = policy.html.dangerous_origins.check(
+                        (&resolved, &policy.html.allow_origins, &tag, location),
+                        logger,
+                    )?
                 {
-                    let host_matched = if let Some(host) = resolved.host().map(|x| x.to_owned()) {
-                        policy
-                            .html
-                            .allow_origins
-                            .iter()
-                            .any(|allowed| host_matches(&host, &allowed.0))
-                    } else {
-                        false
-                    };
-
-                    if !host_matched {
-                        logger.error(RuleError::BlockedOrigin {
-                            tag,
-                            original: resolved.to_string(),
-                            offset: location,
-                        });
-                        el.remove();
-                        return Ok(());
-                    }
+                    replace_attribute(&replace, "data", el);
                 }
             }
             "meta" => {
@@ -425,22 +390,18 @@ pub fn create_rewriter<'a, W: Write>(
             let b64_hash = BASE64_STANDARD.encode(hash_result);
             let csp_hash = format!("sha256-{}", b64_hash);
 
-            let is_allowed = policy
-                .html
-                .allow_scripts
-                .iter()
-                .any(|allowed| allowed == &csp_hash);
-            if is_allowed {
-                t.replace(&inline_script, ContentType::Text);
-            } else {
-                let start = inline_script_location.unwrap_or(0);
-                let end = t.source_location().bytes().end;
+            let start = inline_script_location.unwrap_or(0);
+            let end = t.source_location().bytes().end;
 
-                logger.error(RuleError::BlockedScript {
-                    original: "<inline>".to_owned(),
-                    offset: start..end,
-                });
+            match policy
+                .html
+                .dangerous_scripts
+                .check((&csp_hash, &policy.html.allow_scripts, start..end), logger)?
+            {
+                Some(r) => t.replace(&r, ContentType::Text),
+                None => t.replace(&inline_script, ContentType::Text),
             }
+
             inline_script.clear();
             inline_script_location = None;
         }
@@ -575,7 +536,9 @@ mod tests {
     #[test]
     fn test_script_src_blocked() {
         let mut policy = Policy::default();
+        policy.resources.fetch_sub_resources = false;
         policy.html.allow_scripts = vec!["trusted.com".to_owned()];
+        policy.html.dangerous_scripts = ReplaceRule::with_default(LogLevel::Warn);
 
         let input_html = b"<script src=\"https://untrusted.com/lib.js\"></script>";
         let mut output = Vec::new();
@@ -589,8 +552,7 @@ mod tests {
         rewriter.end().unwrap();
 
         let result = String::from_utf8(output).unwrap();
-        assert!(!result.contains("untrusted.com"));
-        assert!(!result.contains("<script"));
+        assert_eq!(result, "<script src=\"#\"></script>");
     }
 
     #[test]
@@ -616,7 +578,8 @@ mod tests {
 
     #[test]
     fn test_script_inline_blocked() {
-        let policy = Policy::default();
+        let mut policy = Policy::default();
+        policy.html.dangerous_scripts = ReplaceRule::with_default(LogLevel::Warn);
 
         let input_html = b"<script>alert(1)</script>";
         let mut output = Vec::new();
@@ -744,6 +707,7 @@ mod tests {
         let mut policy = Policy::default();
         // policy.html.allow_origins defaults to ["trusted.com"]
         policy.resources.fetch_sub_resources = false;
+        policy.html.dangerous_origins = ReplaceRule::with_default(LogLevel::Warn);
 
         let input_html = b"<div>\
             <iframe src=\"https://trusted.com/page.html\"></iframe>\

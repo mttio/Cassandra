@@ -48,6 +48,8 @@ pub struct HtmlPolicy {
     pub allow_origins: Vec<PolicyHost>,
     /// Action to perform when an event handler is encountered
     pub event_handlers: ReplaceRule<rules::EventHandlers>,
+    pub dangerous_scripts: ReplaceRule<rules::DangerousScripts>,
+    pub dangerous_origins: ReplaceRule<rules::DangerousOrigins>,
     /// Rule for dangerous domains
     pub dangerous_domain: ReplaceRule<rules::DangerousDomain2>,
     /// Rule for dangerous URIs (javascript:, data:)
@@ -64,6 +66,8 @@ impl Default for HtmlPolicy {
                 .map(PolicyHost)
                 .collect(),
             event_handlers: ReplaceRule::with_default(LogLevel::Info),
+            dangerous_scripts: ReplaceRule::with_default(LogLevel::Error),
+            dangerous_origins: ReplaceRule::with_default(LogLevel::Error),
             dangerous_domain: ReplaceRule::with_default(LogLevel::Error),
             dangerous_uris: ReplaceRule::with_default(LogLevel::Info),
         }
