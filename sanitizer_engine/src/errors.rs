@@ -70,15 +70,19 @@ pub enum RuleError {
     #[error("embedded active content ({original}) detected")]
     #[serde(rename = "active_content")]
     ActiveContent { original: String },
-    #[error("Unknown resource type {mime:?}, {path}")]
+    #[error("Unknown resource type: `{}`", match mime {
+        Some(x) => x.pretty(),
+        None => "<none>".pretty(),
+    })]
     #[serde(rename = "unknown_resources")]
-    UnknownResourceType { mime: Option<String>, path: String },
+    UnknownResourceType { mime: Option<String> },
     #[error(
-        "{inner}{}",
+        "{inner}{} {}",
         match replacement {
             Some(x) => format!(" {} `{}`", "->".bright_yellow(), x.pretty()),
             None => "".to_owned(),
         },
+        format_range(offset),
     )]
     #[serde(untagged)]
     Replace {

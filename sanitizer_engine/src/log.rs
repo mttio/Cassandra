@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -164,22 +164,26 @@ pub fn logging_thread(
 
     struct Subresource {
         source: Option<InputSource>,
-        file: Option<File>,
         errors: Vec<RuleError>,
+    }
+
+    struct Source {
+        file: Option<File>,
+        subresources: BTreeMap<usize, Subresource>,
     }
 
     let mut sources = sources
         .iter()
         .enumerate()
-        .map(|(i, x)| {
-            HashMap::from([(
+        .map(|(i, x)| Source {
+            file: File::create(output.join(format!("{i}.log"))).ok(),
+            subresources: BTreeMap::from([(
                 0,
                 Subresource {
                     source: Some(x.clone()),
-                    file: File::create(output.join(format!("{i}.log"))).ok(),
                     errors: Vec::new(),
                 },
-            )])
+            )]),
         })
         .collect_vec();
 
@@ -193,11 +197,10 @@ pub fn logging_thread(
         };
 
         let subresource = source
+            .subresources
             .entry(msg.subresource)
             .or_insert_with(|| Subresource {
                 source: None,
-                file: File::create(output.join(format!("{}-{}.log", msg.source, msg.subresource)))
-                    .ok(),
                 errors: Vec::new(),
             });
 
@@ -233,7 +236,7 @@ pub fn logging_thread(
         }
 
         if msg.level >= file_level
-            && let Some(ref mut file) = subresource.file
+            && let Some(ref mut file) = source.file
         {
             let now = Local::now().naive_local();
             let _ = writeln!(
@@ -265,27 +268,27 @@ pub fn logging_thread(
 
     // Emit machine-readable JSON reports
     for (i, source) in sources.into_iter().enumerate() {
-        for (j, subresource) in source {
-            let file_name = if j == 0 {
-                format!("{i}.json")
-            } else {
-                format!("{i}-{j}.json")
-            };
+        let file_name = format!("{i}.json");
 
-            let input_source_str = match subresource.source {
-                None => "<none>".to_owned(),
-                Some(InputSource::File(p)) => p.to_string_lossy().to_string(),
-                Some(InputSource::Url(u)) => u.to_string(),
-            };
+        let reports = source
+            .subresources
+            .into_values()
+            .map(|subresource| {
+                let input_source_str = match subresource.source {
+                    None => "<none>".to_owned(),
+                    Some(InputSource::File(p)) => p.to_string_lossy().to_string(),
+                    Some(InputSource::Url(u)) => u.to_string(),
+                };
 
-            let report = SanitizationReport {
-                input: input_source_str,
-                actions: subresource.errors,
-            };
+                SanitizationReport {
+                    input: input_source_str,
+                    actions: subresource.errors,
+                }
+            })
+            .collect_vec();
 
-            if let Ok(file) = File::create(output.join(file_name)) {
-                let _ = serde_json::to_writer_pretty(file, &report);
-            }
+        if let Ok(file) = File::create(output.join(file_name)) {
+            let _ = serde_json::to_writer_pretty(file, &reports);
         }
     }
 

@@ -14,7 +14,7 @@ idn = "warn"
 [resources]
 fetch_sub_resources = true
 max_depth = 1
-max_requests = { value = 50, level = "error" }
+max_requests = { value = 5, level = "error" }
 max_bytes = { value = 1048576, level = "error" }
 unknown_resource = "warn"
 

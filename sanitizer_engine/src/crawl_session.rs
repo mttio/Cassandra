@@ -110,13 +110,10 @@ impl CrawlSession {
 
         let sanitized_data = match resource_type {
             None => {
-                self.policy.resources.unknown_resource.handle(
-                    logger,
-                    RuleError::UnknownResourceType {
-                        mime: declared,
-                        path: url.path().to_owned(),
-                    },
-                )?;
+                self.policy
+                    .resources
+                    .unknown_resource
+                    .handle(logger, RuleError::UnknownResourceType { mime: declared })?;
 
                 fetched.data
             }
