@@ -91,7 +91,12 @@ impl CrawlSession {
         }
 
         let declared = fetched.content_type.as_deref().map(mime::clean);
-        let sniffed = mime::sniff(&fetched.data);
+        let sniffed = mime::sniff(&fetched.data).or_else(|| {
+            url.path()
+                .rsplit_once('.')
+                .map(|(_, x)| x)
+                .and_then(KnownResourceType::from_extension)
+        });
         if !mime::validate(declared.as_deref(), sniffed) {
             let err = RuleError::MimeMismatch {
                 expected: declared.clone(),
@@ -100,14 +105,8 @@ impl CrawlSession {
             self.policy.resources.mismatched_mime.handle(logger, err)?;
         }
 
-        let resource_type = sniffed
-            .or_else(|| declared.as_deref().and_then(KnownResourceType::parse))
-            .or_else(|| {
-                url.path()
-                    .rsplit_once('.')
-                    .map(|(_, x)| x)
-                    .and_then(KnownResourceType::from_extension)
-            });
+        let resource_type =
+            sniffed.or_else(|| declared.as_deref().and_then(KnownResourceType::parse));
 
         let sanitized_data = match resource_type {
             None => {
@@ -362,9 +361,6 @@ impl CrawlSession {
             let mut visited = self.url_map.lock();
             visited.insert(url.clone(), index);
             visited.insert(final_base.clone(), index);
-
-            let mut total_requests = self.total_requests.lock();
-            *total_requests += 1;
         }
 
         for (sub_url, local_name) in discovered {
