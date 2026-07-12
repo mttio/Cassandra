@@ -7,9 +7,9 @@ use anyhow::{Context, Result};
 use clap::{ArgAction, Parser};
 use colored::Colorize;
 use std::fs::{self};
-use web_sanitizer_sysprog::InputSource;
-use web_sanitizer_sysprog::log::{LogLevel, logging_thread};
-use web_sanitizer_sysprog::policy::Policy;
+use cassandra::InputSource;
+use cassandra::log::{LogLevel, logging_thread};
+use cassandra::policy::Policy;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -251,7 +251,7 @@ pub fn run(args: Args) -> Result<bool> {
             .bright_black()
             .bold()
     );
-    let library_result = web_sanitizer_sysprog::library(
+    let library_result = cassandra::library(
         &runtime,
         sources.clone(),
         Arc::clone(&policy),

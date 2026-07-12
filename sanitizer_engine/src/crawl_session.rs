@@ -176,7 +176,9 @@ impl CrawlSession {
             let mut total_requests = self.total_requests.lock();
             *total_requests += 1;
             if *total_requests > *max_requests.value.as_ref() {
-                max_requests.check(*total_requests, &self.logger);
+                if let Err(e) = max_requests.check(*total_requests, &self.logger) {
+                    self.logger.error(e);
+                }
 
                 return;
             }
