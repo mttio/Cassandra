@@ -261,8 +261,14 @@ pub fn run(args: Args) -> Result<bool> {
 
     match library_result {
         Ok(_) => {
-            let has_errors =
-                logging_thread(&output_dir, logging_level, LogLevel::Error, &sources, rx);
+            let has_errors = logging_thread(
+                &output_dir,
+                logging_level,
+                LogLevel::Trace,
+                &sources,
+                *policy.resources.max_requests.value.as_ref(),
+                rx,
+            );
             if has_errors {
                 println!("\n{}", "[-] Execution complete with policy blocks/errors. Checked files have been processed.".red().bold());
                 Ok(false)

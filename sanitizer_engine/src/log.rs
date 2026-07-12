@@ -1,6 +1,8 @@
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
 use chrono::Local;
@@ -10,7 +12,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::InputSource;
-use crate::errors::SanitizerMessage;
+use crate::errors::{RuleError, SanitizerMessage};
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -62,11 +64,14 @@ pub trait Log: Sync {
     fn error<T: Into<SanitizerMessage>>(&self, message: T) {
         self.log(LogLevel::Error, message);
     }
+
+    fn subresource(&self, index: usize) -> Self;
 }
 
 #[derive(Clone)]
 pub struct ChannelLogger {
     pub index: usize,
+    pub subresource: usize,
     pub channel: Sender<LoggerMessage>,
 }
 
@@ -75,10 +80,19 @@ impl Log for ChannelLogger {
         self.channel
             .send(LoggerMessage {
                 source: self.index,
+                subresource: self.subresource,
                 level,
                 message: message.into(),
             })
             .unwrap();
+    }
+
+    fn subresource(&self, index: usize) -> Self {
+        Self {
+            index: self.index,
+            subresource: index,
+            channel: self.channel.clone(),
+        }
     }
 }
 
@@ -87,32 +101,42 @@ impl Log for (usize, &Sender<LoggerMessage>) {
         self.1
             .send(LoggerMessage {
                 source: self.0,
+                subresource: 0,
                 level,
                 message: message.into(),
             })
             .unwrap();
     }
+
+    fn subresource(&self, _: usize) -> Self {
+        *self
+    }
 }
 
 pub struct LoggerMessage {
     source: usize,
+    subresource: usize,
     level: LogLevel,
     message: SanitizerMessage,
 }
 
 /// A logger that stores messages in a `Vec`, with interior mutability
-#[derive(Default)]
-pub struct VecLogger(Mutex<Vec<(LogLevel, SanitizerMessage)>>);
+#[derive(Default, Clone)]
+pub struct VecLogger(Arc<Mutex<Vec<(LogLevel, SanitizerMessage)>>>);
 
 impl VecLogger {
     pub fn new() -> Self {
-        Self(Mutex::new(Vec::new()))
+        Self(Default::default())
     }
 }
 
 impl Log for VecLogger {
     fn log<T: Into<SanitizerMessage>>(&self, level: LogLevel, message: T) {
         self.0.lock().push((level, message.into()));
+    }
+
+    fn subresource(&self, _: usize) -> Self {
+        self.clone()
     }
 }
 
@@ -122,6 +146,10 @@ pub struct NullLogger;
 
 impl Log for NullLogger {
     fn log<T: Into<SanitizerMessage>>(&self, _: LogLevel, _: T) {}
+
+    fn subresource(&self, _: usize) -> Self {
+        Self
+    }
 }
 
 pub fn logging_thread(
@@ -129,21 +157,57 @@ pub fn logging_thread(
     console_level: LogLevel,
     file_level: LogLevel,
     sources: &[InputSource],
+    max_subresources: usize,
     channel: Receiver<LoggerMessage>,
 ) -> bool {
-    use crate::errors::{SanitizationReport, SanitizerError, SanitizerMessage};
+    use crate::errors::{SanitizationReport, SanitizerError};
 
-    let max_size = sources.len();
-    let mut files = (0..max_size)
-        .map(|i| File::create(output.join(format!("{i}.log"))).ok())
+    struct Subresource {
+        source: Option<InputSource>,
+        errors: Vec<RuleError>,
+    }
+
+    struct Source {
+        file: Option<File>,
+        subresources: BTreeMap<usize, Subresource>,
+    }
+
+    let mut sources = sources
+        .iter()
+        .enumerate()
+        .map(|(i, x)| Source {
+            file: File::create(output.join(format!("{i}.log"))).ok(),
+            subresources: BTreeMap::from([(
+                0,
+                Subresource {
+                    source: Some(x.clone()),
+                    errors: Vec::new(),
+                },
+            )]),
+        })
         .collect_vec();
 
-    let mut sources = sources.iter().map(|x| (x, Vec::new())).collect_vec();
-
-    let width = (max_size as f64).log10().ceil() as usize;
+    let width1 = (sources.len() as f64).log10().ceil() as usize;
+    let width2 = (max_subresources as f64).log10().ceil() as usize;
     let mut has_errors = false;
 
     for msg in channel {
+        let Some(source) = sources.get_mut(msg.source) else {
+            continue;
+        };
+
+        let subresource = source
+            .subresources
+            .entry(msg.subresource)
+            .or_insert_with(|| Subresource {
+                source: None,
+                errors: Vec::new(),
+            });
+
+        if let SanitizerMessage::CrawlingSubresource { url, .. } = &msg.message {
+            subresource.source = Some(InputSource::Url(url.clone()));
+        }
+
         if msg.level == LogLevel::Error {
             has_errors = true;
         }
@@ -152,8 +216,13 @@ pub fn logging_thread(
 
         if msg.level >= console_level {
             println!(
-                "[{}] {}: {}",
-                format!("{:width$}", msg.source).bold().bright_blue(),
+                "[{}{}] {}: {}",
+                format!("{:>width1$}", msg.source).bold().bright_blue(),
+                if msg.subresource == 0 {
+                    " ".repeat(width2 + 1)
+                } else {
+                    format!("/{:0>width2$}", msg.subresource.to_string().bold().blue())
+                },
                 match msg.level {
                     LogLevel::Trace => "TRACE".bright_black(),
                     LogLevel::Debug => "DEBUG".bright_blue(),
@@ -162,19 +231,24 @@ pub fn logging_thread(
                     LogLevel::Error => "ERROR".bright_red(),
                 }
                 .bold(),
-                error.italic(),
+                error,
             );
         }
 
         if msg.level >= file_level
-            && let Some(Some(file)) = files.get_mut(msg.source)
+            && let Some(ref mut file) = source.file
         {
             let now = Local::now().naive_local();
             let _ = writeln!(
                 file,
-                "[{}] ({:width$}) {}: {}",
+                "({}) [{:>width1$}{}] {}: {}",
                 now.format("%Y-%m-%d %H:%M:%S%.3f"),
                 msg.source,
+                if msg.subresource == 0 {
+                    " ".repeat(width2 + 1)
+                } else {
+                    format!("/{:0>width2$}", msg.subresource)
+                },
                 match msg.level {
                     LogLevel::Trace => "TRACE",
                     LogLevel::Debug => "DEBUG",
@@ -187,28 +261,34 @@ pub fn logging_thread(
         }
 
         // Collect sanitization action events if the message contains one
-        if let SanitizerMessage::Error(SanitizerError::Rule(err)) = msg.message
-            && let Some((_, report)) = sources.get_mut(msg.source)
-        {
-            report.push(err);
+        if let SanitizerMessage::Error(SanitizerError::Rule(err)) = msg.message {
+            subresource.errors.push(err);
         }
     }
 
     // Emit machine-readable JSON reports
-    for (i, (source, errors)) in sources.into_iter().enumerate() {
-        let report_path = output.join(format!("{i}.json"));
-        let input_source_str = match source {
-            InputSource::File(p) => p.to_string_lossy().to_string(),
-            InputSource::Url(u) => u.to_string(),
-        };
+    for (i, source) in sources.into_iter().enumerate() {
+        let file_name = format!("{i}.json");
 
-        let report = SanitizationReport {
-            input: input_source_str,
-            actions: errors,
-        };
+        let reports = source
+            .subresources
+            .into_values()
+            .map(|subresource| {
+                let input_source_str = match subresource.source {
+                    None => "<none>".to_owned(),
+                    Some(InputSource::File(p)) => p.to_string_lossy().to_string(),
+                    Some(InputSource::Url(u)) => u.to_string(),
+                };
 
-        if let Ok(file) = File::create(&report_path) {
-            let _ = serde_json::to_writer_pretty(file, &report);
+                SanitizationReport {
+                    input: input_source_str,
+                    actions: subresource.errors,
+                }
+            })
+            .collect_vec();
+
+        if let Ok(file) = File::create(output.join(file_name)) {
+            let _ = serde_json::to_writer_pretty(file, &reports);
         }
     }
 
@@ -219,6 +299,7 @@ pub fn logging_thread(
 mod tests {
     use super::*;
     use crate::crawl_session::CrawlSession;
+    use crate::errors::RuleReplaceError;
     use crate::http_client::SanitizerHttpClient;
     use crate::policy::Policy;
     use parking_lot::Mutex;
@@ -239,6 +320,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let logger = ChannelLogger {
             index: 0,
+            subresource: 0,
             channel: tx,
         };
 
@@ -275,8 +357,11 @@ mod tests {
         use crate::errors::{RuleError, SanitizationReport};
         use std::path::PathBuf;
 
-        let err = RuleError::BlockedScript {
-            original: "evil_script()".to_owned(),
+        let err = RuleError::Replace {
+            inner: RuleReplaceError::DangerousScript {
+                original: Some("evil_script()".to_owned()),
+            },
+            replacement: None,
             offset: 10..20,
         };
         // let event = err.to_event();
@@ -290,6 +375,7 @@ mod tests {
         // Send a message on the channel
         tx.send(LoggerMessage {
             source: 0,
+            subresource: 0,
             level: LogLevel::Error,
             message: err.into(),
         })
@@ -297,7 +383,8 @@ mod tests {
         drop(tx);
 
         let sources = vec![InputSource::File(PathBuf::from("test_input.html"))];
-        let has_errors = logging_thread(&temp_dir, LogLevel::Error, LogLevel::Error, &sources, rx);
+        let has_errors =
+            logging_thread(&temp_dir, LogLevel::Error, LogLevel::Trace, &sources, 1, rx);
         assert!(has_errors);
 
         // Check if the report file was created
@@ -309,7 +396,13 @@ mod tests {
         let report: SanitizationReport = serde_json::from_str(&content).unwrap();
         assert_eq!(report.input, "test_input.html");
         assert_eq!(report.actions.len(), 1);
-        assert!(matches!(report.actions[0], RuleError::BlockedScript { .. }));
+        assert!(matches!(
+            report.actions[0],
+            RuleError::Replace {
+                inner: RuleReplaceError::DangerousScript { .. },
+                ..
+            }
+        ));
 
         // Cleanup
         let _ = std::fs::remove_file(report_path);

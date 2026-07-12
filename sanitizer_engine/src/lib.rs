@@ -64,6 +64,7 @@ pub fn library(
     for (i, source) in sources.into_iter().enumerate() {
         let logger = ChannelLogger {
             index: i,
+            subresource: 0,
             channel: tx.clone(),
         };
 

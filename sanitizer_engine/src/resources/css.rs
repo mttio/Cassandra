@@ -124,7 +124,7 @@ pub fn sanitize(
             let url = read_url_string(&chars, &mut i, ')');
 
             let url_clean = url.trim().to_string();
-            if let Some(replace) = rule.check((&url_clean, offset), logger)? {
+            if let Some(replace) = rule.check(&url_clean, offset..offset + url.len(), logger)? {
                 output.push_str(&format!("url(\"{replace}\")"));
             } else if let Ok(resolved_url) = base_url.join(&url_clean) {
                 let ext = url_clean

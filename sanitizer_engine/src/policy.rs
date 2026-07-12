@@ -48,6 +48,8 @@ pub struct HtmlPolicy {
     pub allow_origins: Vec<PolicyHost>,
     /// Action to perform when an event handler is encountered
     pub event_handlers: ReplaceRule<rules::EventHandlers>,
+    pub dangerous_scripts: ReplaceRule<rules::DangerousScripts>,
+    pub dangerous_origins: ReplaceRule<rules::DangerousOrigins>,
     /// Rule for dangerous domains
     pub dangerous_domain: ReplaceRule<rules::DangerousDomain2>,
     /// Rule for dangerous URIs (javascript:, data:)
@@ -64,6 +66,8 @@ impl Default for HtmlPolicy {
                 .map(PolicyHost)
                 .collect(),
             event_handlers: ReplaceRule::with_default(LogLevel::Info),
+            dangerous_scripts: ReplaceRule::with_default(LogLevel::Error),
+            dangerous_origins: ReplaceRule::with_default(LogLevel::Error),
             dangerous_domain: ReplaceRule::with_default(LogLevel::Error),
             dangerous_uris: ReplaceRule::with_default(LogLevel::Info),
         }
@@ -144,7 +148,7 @@ impl Default for ConnectionsPolicy {
             connection_timeout: Duration::from_secs(3),
             overall_timeout: Duration::from_secs(15),
             max_redirects: RuleWithValue::with_default(LogLevel::Error),
-            user_agent: "CoolBot/0.0 (https://example.org/coolbot/; coolbot@example.org) generic-library/0.0".to_owned(),
+            user_agent: format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
             dangerous_domain: RuleWithValue::with_default(LogLevel::Error),
         }
     }
