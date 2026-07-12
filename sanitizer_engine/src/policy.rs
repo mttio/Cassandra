@@ -148,7 +148,7 @@ impl Default for ConnectionsPolicy {
             connection_timeout: Duration::from_secs(3),
             overall_timeout: Duration::from_secs(15),
             max_redirects: RuleWithValue::with_default(LogLevel::Error),
-            user_agent: "CoolBot/0.0 (https://example.org/coolbot/; coolbot@example.org) generic-library/0.0".to_owned(),
+            user_agent: format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
             dangerous_domain: RuleWithValue::with_default(LogLevel::Error),
         }
     }

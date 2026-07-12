@@ -7,13 +7,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::{Host, Url};
 
-fn format_option_range(range: &Option<Range<usize>>) -> String {
-    match range {
-        Some(x) => format!(" {}", format_range(x)),
-        None => "".to_owned(),
-    }
-}
-
 fn format_range(range: &Range<usize>) -> String {
     format!(
         "@ {}..{}",
@@ -54,8 +47,8 @@ pub enum RuleError {
     },
     #[error(
         "MIME mismatch (expected = {}, actual = {})",
-        expected.as_deref().unwrap_or("<none>"),
-        actual.as_deref().unwrap_or("<none>"),
+        expected.as_deref().unwrap_or("<none>").pretty(),
+        actual.as_deref().unwrap_or("<none>").pretty(),
     )]
     #[serde(rename = "mime_mismatch")]
     MimeMismatch {
@@ -78,6 +71,7 @@ pub enum RuleError {
     #[serde(rename = "active_content")]
     ActiveContent { original: String },
     #[error("Unknown resource type {mime:?}, {path}")]
+    #[serde(rename = "unknown_resources")]
     UnknownResourceType { mime: Option<String>, path: String },
     #[error(
         "{inner}{}",
@@ -91,6 +85,7 @@ pub enum RuleError {
         #[serde(flatten)]
         inner: RuleReplaceError,
         replacement: Option<String>,
+        offset: Range<usize>,
     },
 }
 
@@ -98,48 +93,30 @@ pub enum RuleError {
 #[error(transparent)]
 #[serde(tag = "type")]
 pub enum RuleReplaceError {
-    #[error("event handler{}: `{}`", format_option_range(offset), original.pretty())]
+    #[error("event handler: `{}`", original.pretty())]
     #[serde(rename = "event_handlers")]
-    EventHandler {
-        offset: Option<Range<usize>>,
-        original: String,
-    },
-    #[error("dangerous script {}: `{}`",
-        format_range(offset),
+    EventHandler { original: String },
+    #[error("dangerous script: `{}`",
         match original {
             Some(x) => x.pretty(),
             None => "<inline>".pretty()
         },
     )]
     #[serde(rename = "dangerous_scripts")]
-    DangerousScript {
-        offset: Range<usize>,
-        original: Option<String>,
-    },
+    DangerousScript { original: Option<String> },
     #[error(
-        "dangerous origin {} (tag = {}): `{}`",
-        format_range(offset),
+        "dangerous origin (tag = {}): `{}`",
         tag.pretty(),
         original.pretty(),
     )]
     #[serde(rename = "dangerous_origins")]
-    DangerousOrigin {
-        tag: String,
-        offset: Range<usize>,
-        original: String,
-    },
-    #[error("dangerous domain {}: `{}`", format_range(offset), original.pretty())]
+    DangerousOrigin { tag: String, original: String },
+    #[error("dangerous domain: `{}`", original.pretty())]
     #[serde(rename = "dangerous_domain")]
-    DangerousDomain {
-        offset: Range<usize>,
-        original: Host,
-    },
-    #[error("dangerous URI{}: `{}`", format_option_range(offset), original.pretty())]
+    DangerousDomain { original: Host },
+    #[error("dangerous URI: `{}`", original.pretty())]
     #[serde(rename = "dangerous_uris")]
-    DangerousUri {
-        offset: Option<Range<usize>>,
-        original: String,
-    },
+    DangerousUri { original: String },
     #[error("IDN url: `{}`", original.pretty())]
     #[serde(rename = "idn")]
     Idn { original: String },
@@ -147,12 +124,11 @@ pub enum RuleReplaceError {
     #[serde(rename = "dangerous_js")]
     DangerousJsConstruct { original: String },
     #[error(
-        "Dangerous construct detected in CSS @ {}: `{}`",
-        offset.to_string().bright_magenta(),
+        "Dangerous construct detected in CSS: `{}`",
         original.pretty(),
     )]
     #[serde(rename = "dangerous_css")]
-    DangerousCssConstruct { offset: usize, original: String },
+    DangerousCssConstruct { original: String },
 }
 
 /// An error that the sanitizer can produce

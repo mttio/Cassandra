@@ -65,6 +65,7 @@ impl CrawlSession {
         url: Url,
         local_name: String,
         depth: usize,
+        logger: &impl Log,
     ) -> Result<(), SanitizerError> {
         let total_bytes = *self.total_bytes.lock();
 
@@ -73,14 +74,14 @@ impl CrawlSession {
             .max_bytes
             .check(total_bytes, &self.logger)?;
 
-        self.logger.info(SanitizerMessage::CrawlingSubresource {
+        logger.info(SanitizerMessage::CrawlingSubresource {
             depth,
             url: url.clone(),
         });
 
         let fetched = self
             .client
-            .fetch_raw(&url, &self.logger, &self.policy, total_bytes)
+            .fetch_raw(&url, logger, &self.policy, total_bytes)
             .await
             .map_err(|e| SanitizerError::UrlFetch(url.clone(), Box::new(e), false))?;
 
@@ -96,10 +97,7 @@ impl CrawlSession {
                 expected: declared.clone(),
                 actual: sniffed.map(|x| x.to_string()),
             };
-            self.policy
-                .resources
-                .mismatched_mime
-                .handle(&self.logger, err)?;
+            self.policy.resources.mismatched_mime.handle(logger, err)?;
         }
 
         let resource_type = sniffed
@@ -114,7 +112,7 @@ impl CrawlSession {
         let sanitized_data = match resource_type {
             None => {
                 self.policy.resources.unknown_resource.handle(
-                    &self.logger,
+                    logger,
                     RuleError::UnknownResourceType {
                         mime: declared,
                         path: url.path().to_owned(),
@@ -134,7 +132,7 @@ impl CrawlSession {
                 let (sanitized_css, nested_urls) = crate::resources::css::sanitize(
                     &css_str,
                     &url,
-                    &self.logger,
+                    logger,
                     &self.policy.resources.dangerous_css,
                 )?;
                 for (n_url, n_local) in nested_urls {
@@ -144,11 +142,11 @@ impl CrawlSession {
             }
             Some(KnownResourceType::Js) => {
                 let js_str = String::from_utf8_lossy(&fetched.data);
-                if let Some(x) = self
-                    .policy
-                    .resources
-                    .dangerous_js
-                    .check(&js_str, &self.logger)?
+                if let Some(x) =
+                    self.policy
+                        .resources
+                        .dangerous_js
+                        .check(&js_str, 0..js_str.len(), logger)?
                 {
                     x.as_bytes().to_vec()
                 } else {
@@ -158,7 +156,7 @@ impl CrawlSession {
             Some(KnownResourceType::Pdf) => {
                 crate::resources::pdf::sanitize(
                     &fetched.data,
-                    &self.logger,
+                    logger,
                     self.policy.resources.pdf_active_content,
                 )?;
 
@@ -173,7 +171,7 @@ impl CrawlSession {
     /// Checks limits and registers a sub-resource URL, then enqueues it if valid and not visited.
     fn try_enqueue_subresource(self: &Arc<Self>, url: Url, local_name: String, depth: usize) {
         let max_requests = &self.policy.resources.max_requests;
-        {
+        let logger = {
             let mut visited = self.url_map.lock();
             if visited.contains_key(&url) {
                 return;
@@ -188,17 +186,21 @@ impl CrawlSession {
             }
 
             visited.insert(url.clone(), self.index());
-        }
+            self.logger.subresource(*total_requests)
+        };
 
         if let Err(e) = self.policy.resources.max_depth.check(depth, &self.logger) {
-            self.logger.error(e);
+            logger.error(e);
             return;
         }
 
         let clone = Arc::clone(self);
         self.rt_handle.spawn(async move {
-            if let Err(e) = clone.crawl_subresource(url, local_name, depth).await {
-                clone.logger.error(e);
+            if let Err(e) = clone
+                .crawl_subresource(url, local_name, depth, &logger)
+                .await
+            {
+                logger.error(e);
             }
         });
     }
@@ -258,11 +260,11 @@ impl CrawlSession {
         let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
         let js_str = String::from_utf8_lossy(&data);
 
-        let to_write = if let Some(x) = self
-            .policy
-            .resources
-            .dangerous_js
-            .check(&js_str, &self.logger)?
+        let to_write = if let Some(x) =
+            self.policy
+                .resources
+                .dangerous_js
+                .check(&js_str, 0..js_str.len(), &self.logger)?
         {
             x.as_bytes().to_vec()
         } else {
@@ -319,7 +321,7 @@ impl CrawlSession {
 
     /// Worker task fetching a remote HTML document, sanitizing it, and enqueuing referenced sub-resources.
     pub async fn process_url(self: Arc<Self>, url: Url) {
-        if let Err(e) = self.policy.urls.idn.check(&url, &self.logger) {
+        if let Err(e) = self.policy.urls.idn.check(&url, 0..0, &self.logger) {
             self.logger.error(e);
             return;
         }

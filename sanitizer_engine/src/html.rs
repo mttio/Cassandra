@@ -31,7 +31,7 @@ fn handle_dangerous_link_2(
     {
         if let Some(host) = resolved.host() {
             // Check IDN
-            match policy.urls.idn.check(&resolved, logger) {
+            match policy.urls.idn.check(&resolved, location.clone(), logger) {
                 Ok(Some(r)) => {
                     replace(&r);
                 }
@@ -45,11 +45,11 @@ fn handle_dangerous_link_2(
 
             let host = host.to_owned();
 
-            match policy
-                .html
-                .dangerous_domain
-                .check((&host, &policy.urls.dangerous_domains, location), logger)
-            {
+            match policy.html.dangerous_domain.check(
+                (&host, &policy.urls.dangerous_domains),
+                location,
+                logger,
+            ) {
                 Ok(Some(x)) => {
                     let new = match resolved.set_host(Some(x.as_ref())) {
                         // If policy value is a valid host, replace the host of the old url
@@ -164,9 +164,18 @@ pub fn create_rewriter<'a, W: Write>(
         let mut to_replace = Vec::new();
 
         for attr in el.attributes() {
-            if let Some(x) = policy.html.event_handlers.check(attr, logger)? {
+            let location = attr
+                .name_source_location()
+                .map(|x| x.bytes())
+                .unwrap_or(0..0);
+
+            if let Some(x) = policy
+                .html
+                .event_handlers
+                .check(attr, location.clone(), logger)?
+            {
                 to_replace.push((attr.name(), x));
-            } else if let Some(x) = policy.html.dangerous_uris.check(attr, logger)? {
+            } else if let Some(x) = policy.html.dangerous_uris.check(attr, location, logger)? {
                 to_replace.push((attr.name(), x));
             }
         }
@@ -301,11 +310,11 @@ pub fn create_rewriter<'a, W: Write>(
                 {
                     if let Some(host) = resolved.host() {
                         let host = host.to_string();
-                        if let Some(replace) = policy
-                            .html
-                            .dangerous_scripts
-                            .check((&host, &policy.html.allow_scripts, location), logger)?
-                        {
+                        if let Some(replace) = policy.html.dangerous_scripts.check(
+                            (&host, &policy.html.allow_scripts),
+                            location,
+                            logger,
+                        )? {
                             replace_attribute(&replace, "src", el);
                         }
                     };
@@ -318,10 +327,11 @@ pub fn create_rewriter<'a, W: Write>(
                     }
                 } else {
                     if let Some(src) = el.get_attribute("src")
-                        && let Some(replace) = policy
-                            .html
-                            .dangerous_scripts
-                            .check((&src, &[], location), logger)?
+                        && let Some(replace) =
+                            policy
+                                .html
+                                .dangerous_scripts
+                                .check((&src, &[]), location, logger)?
                     {
                         replace_attribute(&replace, "src", el);
                     }
@@ -332,7 +342,8 @@ pub fn create_rewriter<'a, W: Write>(
                 if let Some(resolved) =
                     handle_dangerous_link(el, "src", &state.base, policy, logger)?
                     && let Some(replace) = policy.html.dangerous_origins.check(
-                        (&resolved, &policy.html.allow_origins, &tag, location),
+                        (&resolved, &policy.html.allow_origins, &tag),
+                        location,
                         logger,
                     )?
                 {
@@ -344,7 +355,8 @@ pub fn create_rewriter<'a, W: Write>(
                 if let Some(resolved) =
                     handle_dangerous_link(el, "data", &state.base, policy, logger)?
                     && let Some(replace) = policy.html.dangerous_origins.check(
-                        (&resolved, &policy.html.allow_origins, &tag, location),
+                        (&resolved, &policy.html.allow_origins, &tag),
+                        location,
                         logger,
                     )?
                 {
@@ -393,11 +405,11 @@ pub fn create_rewriter<'a, W: Write>(
             let start = inline_script_location.unwrap_or(0);
             let end = t.source_location().bytes().end;
 
-            match policy
-                .html
-                .dangerous_scripts
-                .check((&csp_hash, &policy.html.allow_scripts, start..end), logger)?
-            {
+            match policy.html.dangerous_scripts.check(
+                (&csp_hash, &policy.html.allow_scripts),
+                start..end,
+                logger,
+            )? {
                 Some(r) => t.replace(&r, ContentType::Text),
                 None => t.replace(&inline_script, ContentType::Text),
             }

@@ -185,7 +185,7 @@ impl SanitizerHttpClient {
                 let logger = (index, &channel);
 
                 let check = || -> Result<(), SanitizerError> {
-                    policy.urls.idn.check(attempt.url(), &logger)?;
+                    policy.urls.idn.check(attempt.url(), 0..0, &logger)?;
 
                     policy
                         .connections

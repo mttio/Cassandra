@@ -2,6 +2,7 @@
 allow_scripts = []
 allow_origins = ["trusted.com"]
 event_handlers = "info"
+dangerous_scripts = "warn"
 
 [urls]
 dangerous_domains = [
@@ -13,8 +14,9 @@ idn = "warn"
 [resources]
 fetch_sub_resources = true
 max_depth = 1
-max_requests = { value = 5, level = "error" }
+max_requests = { value = 50, level = "error" }
 max_bytes = { value = 1048576, level = "error" }
+unknown_resource = "warn"
 
 [connections]
 connection_timeout = "3s"
@@ -23,5 +25,5 @@ max_redirects = {
   value = 2,
   level = "error"
 }
-user_agent = "CoolBot/0.0 (https://example.org/coolbot/; coolbot@example.org) generic-library/0.0"
+user_agent = "cassandra/0.0.1"
 dangerous_domain = "error"
