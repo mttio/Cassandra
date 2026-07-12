@@ -9,13 +9,13 @@ Penelope Web Sanitizer is a defensive, high-performance system utility designed 
 The project is structured as a multi-crate Cargo workspace to cleanly decouple the core sanitization engine from the command-line interface (CLI).
 
 ```
-web_sanitizer_sysprog/ (Workspace Root)
+cassandra/ (Workspace Root)
 ├── Cargo.toml
 ├── policies/
 │   └── default.toml
 ├── input_test_files/
 ├── output/
-├── sanitizer_engine/ (Library Crate: web_sanitizer_sysprog)
+├── sanitizer_engine/ (Library Crate: cassandra)
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs
@@ -38,7 +38,7 @@ web_sanitizer_sysprog/ (Workspace Root)
         └── main.rs
 ```
 
-- **`web_sanitizer_sysprog` (Library Crate)**: Contains the core sanitization, URL resolution, HTTP parsing, MIME sniffing, and recursive crawler logic. Exposes a programmatic API.
+- **`cassandra` (Library Crate)**: Contains the core sanitization, URL resolution, HTTP parsing, MIME sniffing, and recursive crawler logic. Exposes a programmatic API.
 - **`cli_application` (Binary Crate)**: Wraps the library crate, parses CLI arguments (using `clap`), maps paths, and displays colored terminal progress indicators.
 
 ---

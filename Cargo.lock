@@ -130,6 +130,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
+name = "cassandra"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "colored",
+ "futures-util",
+ "hickory-resolver",
+ "humantime-serde",
+ "itertools",
+ "lol_html",
+ "nutype",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "strip-ansi-escapes",
+ "thiserror",
+ "tokio",
+ "unicode-normalization",
+ "url",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.62"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -220,6 +245,7 @@ name = "cli_application"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cassandra",
  "clap",
  "colored",
  "serde",
@@ -227,7 +253,6 @@ dependencies = [
  "toml",
  "url",
  "walkdir",
- "web_sanitizer_sysprog",
 ]
 
 [[package]]
@@ -2607,31 +2632,6 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "web_sanitizer_sysprog"
-version = "0.1.0"
-dependencies = [
- "base64",
- "chrono",
- "colored",
- "futures-util",
- "hickory-resolver",
- "humantime-serde",
- "itertools",
- "lol_html",
- "nutype",
- "parking_lot",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "strip-ansi-escapes",
- "thiserror",
- "tokio",
- "unicode-normalization",
- "url",
 ]
 
 [[package]]

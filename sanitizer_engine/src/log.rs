@@ -222,7 +222,6 @@ mod tests {
     use crate::http_client::SanitizerHttpClient;
     use crate::policy::Policy;
     use parking_lot::Mutex;
-    use std::assert_matches;
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
@@ -310,7 +309,7 @@ mod tests {
         let report: SanitizationReport = serde_json::from_str(&content).unwrap();
         assert_eq!(report.input, "test_input.html");
         assert_eq!(report.actions.len(), 1);
-        assert_matches!(report.actions[0], RuleError::BlockedScript { .. });
+        assert!(matches!(report.actions[0], RuleError::BlockedScript { .. }));
 
         // Cleanup
         let _ = std::fs::remove_file(report_path);
