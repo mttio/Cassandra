@@ -168,15 +168,15 @@ pub fn logging_thread(
     }
 
     struct Source {
-        file: Option<File>,
+        log_lines: Vec<String>,
         subresources: BTreeMap<usize, Subresource>,
     }
 
     let mut sources = sources
         .iter()
         .enumerate()
-        .map(|(i, x)| Source {
-            file: File::create(output.join(format!("{i}.log"))).ok(),
+        .map(|(_i, x)| Source {
+            log_lines: Vec::new(),
             subresources: BTreeMap::from([(
                 0,
                 Subresource {
@@ -235,12 +235,9 @@ pub fn logging_thread(
             );
         }
 
-        if msg.level >= file_level
-            && let Some(ref mut file) = source.file
-        {
+        if msg.level >= file_level {
             let now = Local::now().naive_local();
-            let _ = writeln!(
-                file,
+            let line = format!(
                 "({}) [{:>width1$}{}] {}: {}",
                 now.format("%Y-%m-%d %H:%M:%S%.3f"),
                 msg.source,
@@ -258,6 +255,7 @@ pub fn logging_thread(
                 },
                 strip_ansi_escapes::strip_str(&error),
             );
+            source.log_lines.push(line);
         }
 
         // Collect sanitization action events if the message contains one
@@ -266,31 +264,65 @@ pub fn logging_thread(
         }
     }
 
-    // Emit machine-readable JSON reports
-    for (i, source) in sources.into_iter().enumerate() {
-        let file_name = format!("{i}.json");
+    // Partition tasks among a fixed number of threads matching hardware concurrency
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
 
-        let reports = source
-            .subresources
-            .into_values()
-            .map(|subresource| {
-                let input_source_str = match subresource.source {
-                    None => "<none>".to_owned(),
-                    Some(InputSource::File(p)) => p.to_string_lossy().to_string(),
-                    Some(InputSource::Url(u)) => u.to_string(),
-                };
-
-                SanitizationReport {
-                    input: input_source_str,
-                    actions: subresource.errors,
-                }
-            })
-            .collect_vec();
-
-        if let Ok(file) = File::create(output.join(file_name)) {
-            let _ = serde_json::to_writer_pretty(file, &reports);
-        }
+    let mut thread_chunks = Vec::with_capacity(num_threads);
+    for _ in 0..num_threads {
+        thread_chunks.push(Vec::new());
     }
+    for (i, source) in sources.into_iter().enumerate() {
+        thread_chunks[i % num_threads].push((i, source));
+    }
+
+    // Emit reports and log files in parallel using scoped threads
+    std::thread::scope(|s| {
+        for chunk in thread_chunks {
+            if chunk.is_empty() {
+                continue;
+            }
+            let output_path = output.to_path_buf();
+            s.spawn(move || {
+                for (i, source) in chunk {
+                    // Write human-readable log file
+                    if !source.log_lines.is_empty() {
+                        let log_path = output_path.join(format!("{i}.log"));
+                        if let Ok(mut file) = File::create(&log_path) {
+                            for line in source.log_lines {
+                                let _ = writeln!(file, "{}", line);
+                            }
+                        }
+                    }
+
+                    // Emit machine-readable JSON reports
+                    let file_name = format!("{i}.json");
+                    let reports = source
+                        .subresources
+                        .into_values()
+                        .map(|subresource| {
+                            let input_source_str = match subresource.source {
+                                None => "<none>".to_owned(),
+                                Some(InputSource::File(p)) => p.to_string_lossy().to_string(),
+                                Some(InputSource::Url(u)) => u.to_string(),
+                            };
+
+                            SanitizationReport {
+                                input: input_source_str,
+                                actions: subresource.errors,
+                            }
+                        })
+                        .collect_vec();
+
+                    let json_path = output_path.join(file_name);
+                    if let Ok(file) = File::create(json_path) {
+                        let _ = serde_json::to_writer_pretty(file, &reports);
+                    }
+                }
+            });
+        }
+    });
 
     has_errors
 }

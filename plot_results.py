@@ -208,15 +208,16 @@ Scalability was measured by processing two workloads of different scale across v
   - **Small Workload (No Speed-up / Scheduling Slowdown)**:
     For the small workload, increasing the thread count yields **no speed-up** (with 16 threads often being slower than 1 thread). Because each individual HTML file is processed in microseconds, the overall workload completes in under 100ms. 
     The time required to initialize the multi-threaded Tokio runtimes, spawn OS threads, and coordinate thread execution (task scheduling, context switching) completely dwarfs the actual parsing work.
-  - **Large Workload (Highly Constrained Speed-up)**:
-    For the large workload (7000 files), although the fixed thread startup overhead is amortized, the speed-up is still heavily constrained (maxing out at around **1.15x**). 
-- **The Core Bottleneck: Synchronous File I/O on the Main Thread**:
-  A deep dive into the engine's design reveals the primary bottleneck: in the engine's `logging_thread` (which blocks synchronously on the main thread), the engine creates two files (`{{i}}.log` and `{{i}}.json` report) for every single input source.
-  For a 7000-file workload, this triggers **14,000 synchronous file creation and write operations** on the main thread.
-  Because the zero-copy HTML parsing runs in microseconds on the parallel worker threads, the overall runtime is almost entirely dominated by this sequential file I/O bottleneck on the main thread. This negates the performance benefits of scaling to multiple cores.
+  - **Large Workload (Constrained Speed-up)**:
+    For the large workload (7000 files), although we parallelized the log/JSON file writing at the end using scoped threads, the overall speed-up is still constrained to around **1.13x - 1.15x**.
+- **The Core Bottlenecks: Filesystem Locking and Constant I/O Time**:
+  A deep analysis of the execution results reveals two primary factors:
+  1. **Filesystem Lock Contention (14,000 files)**: Writing 14,000 separate files (one `.log` and one `.json` for each of the 7,000 input sources) under a single output folder causes massive filesystem directory-level write locking and metadata contention at the operating system level. The OS filesystem driver (such as APFS on macOS or ext4 on Linux) serializes these concurrent file creations.
+  2. **Constant Parallel Write Overhead**: The parallel file writing phase runs at the end of the execution using a fixed number of threads determined by the system's hardware cores (`std::thread::available_parallelism`). Consequently, the I/O writing duration (~4.4 seconds) remains relatively constant across all benchmarks, regardless of whether the Tokio parsing runtime is configured with 1 worker thread or 16 worker threads.
+  3. **Negligible CPU Parsing Work**: Because Rust's zero-copy HTML parsing runs in microseconds, the constant I/O writing overhead dominates the overall benchmark duration, diluting the speed-up curve of the parsing phase.
 - **Other Bottlenecks**:
   1. **Lock Contention on Shared State**: The crawler checks a shared registry `Arc<Mutex<HashMap<Url, usize>>>` to track visited pages. Multi-threaded workers repeatedly block on this lock.
-  2. **Filesystem Write Contention**: Concurrently writing the sanitized HTML output files to the same output directory causes filesystem serialization.
+  2. **Sanitized Output Disk Writes**: Concurrently writing the sanitized HTML output files causes additional filesystem write contention.
 
 ---
 
