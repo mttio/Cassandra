@@ -85,14 +85,11 @@ fn run_sanitization(
 
     // Read the generated JSON reports
     let mut reports = Vec::new();
-    for i in 0..sources.len() {
-        let report_path = output_dir_arc.join(format!("{i}.json"));
-        if report_path.exists() {
-            let content = std::fs::read_to_string(&report_path)?;
-            let file_reports: Vec<cassandra::errors::SanitizationReport> = serde_json::from_str(&content)
-                .context(format!("Failed to parse report {report_path:?}"))?;
-            reports.extend(file_reports);
-        }
+    let report_path = output_dir_arc.join("report.json");
+    if report_path.exists() {
+        let content = std::fs::read_to_string(&report_path)?;
+        reports = serde_json::from_str(&content)
+            .context(format!("Failed to parse report {report_path:?}"))?;
     }
 
     Ok((reports, parse_time, write_time))

@@ -266,66 +266,45 @@ pub fn logging_thread(
     }
     let loop_elapsed = start_loop.elapsed().as_secs_f64();
 
-    // Partition tasks among a fixed number of threads matching hardware concurrency
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-
-    let mut thread_chunks = Vec::with_capacity(num_threads);
-    for _ in 0..num_threads {
-        thread_chunks.push(Vec::new());
-    }
-    for (i, source) in sources.into_iter().enumerate() {
-        thread_chunks[i % num_threads].push((i, source));
-    }
-
     let start_write = std::time::Instant::now();
-    // Emit reports and log files in parallel using scoped threads
-    std::thread::scope(|s| {
-        for chunk in thread_chunks {
-            if chunk.is_empty() {
-                continue;
+
+    // 1. Write consolidated log file
+    let log_path = output.join("cassandra.log");
+    if let Ok(mut file) = File::create(&log_path) {
+        for source in &sources {
+            for line in &source.log_lines {
+                let _ = writeln!(file, "{}", line);
             }
-            let output_path = output.to_path_buf();
-            s.spawn(move || {
-                for (i, source) in chunk {
-                    // Write human-readable log file
-                    if !source.log_lines.is_empty() {
-                        let log_path = output_path.join(format!("{i}.log"));
-                        if let Ok(mut file) = File::create(&log_path) {
-                            for line in source.log_lines {
-                                let _ = writeln!(file, "{}", line);
-                            }
-                        }
-                    }
-
-                    // Emit machine-readable JSON reports
-                    let file_name = format!("{i}.json");
-                    let reports = source
-                        .subresources
-                        .into_values()
-                        .map(|subresource| {
-                            let input_source_str = match subresource.source {
-                                None => "<none>".to_owned(),
-                                Some(InputSource::File(p)) => p.to_string_lossy().to_string(),
-                                Some(InputSource::Url(u)) => u.to_string(),
-                            };
-
-                            SanitizationReport {
-                                input: input_source_str,
-                                actions: subresource.errors,
-                            }
-                        })
-                        .collect_vec();
-
-                    let json_path = output_path.join(file_name);
-                    if let Ok(file) = File::create(json_path) {
-                        let _ = serde_json::to_writer_pretty(file, &reports);
-                    }
-                }
-            });
         }
-    });
+    }
+
+    // 2. Write consolidated machine-readable JSON reports
+    let mut all_reports = Vec::new();
+    for source in sources {
+        let reports = source
+            .subresources
+            .into_values()
+            .map(|subresource| {
+                let input_source_str = match subresource.source {
+                    None => "<none>".to_owned(),
+                    Some(InputSource::File(p)) => p.to_string_lossy().to_string(),
+                    Some(InputSource::Url(u)) => u.to_string(),
+                };
+
+                SanitizationReport {
+                    input: input_source_str,
+                    actions: subresource.errors,
+                }
+            })
+            .collect_vec();
+        all_reports.extend(reports);
+    }
+
+    let json_path = output.join("report.json");
+    if let Ok(file) = File::create(&json_path) {
+        let _ = serde_json::to_writer_pretty(file, &all_reports);
+    }
+
     let write_elapsed = start_write.elapsed().as_secs_f64();
 
     (has_errors, loop_elapsed, write_elapsed)
@@ -424,7 +403,7 @@ mod tests {
         assert!(has_errors);
 
         // Check if the report file was created
-        let report_path = temp_dir.join("0.json");
+        let report_path = temp_dir.join("report.json");
         assert!(report_path.exists());
 
         // Read and parse report
@@ -444,6 +423,6 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file(report_path);
-        let _ = std::fs::remove_file(temp_dir.join("0.log"));
+        let _ = std::fs::remove_file(temp_dir.join("cassandra.log"));
     }
 }
