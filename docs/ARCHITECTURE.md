@@ -1,6 +1,6 @@
-# Penelope Web Sanitizer: System Architecture
+# Cassandra Web Sanitizer: System Architecture
 
-Penelope Web Sanitizer is a defensive, high-performance system utility designed in Rust to inspect, neutralize, and rewrite web pages and embedded resources before they reach a client system. This document describes the modular architecture of the codebase, its components, implementation details, and design decisions.
+Cassandra Web Sanitizer is a defensive, high-performance system utility designed in Rust to inspect, neutralize, and rewrite web pages and embedded resources before they reach a client system. This document describes the modular architecture of the codebase, its components, implementation details, and design decisions.
 
 ---
 
