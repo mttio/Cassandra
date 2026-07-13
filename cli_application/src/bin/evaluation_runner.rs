@@ -56,7 +56,7 @@ fn run_sanitization(
     sources: Vec<InputSource>,
     policy: Arc<Policy>,
     output_dir: PathBuf,
-) -> Result<Vec<cassandra::errors::SanitizationReport>> {
+) -> Result<(Vec<cassandra::errors::SanitizationReport>, f64, f64)> {
     let (tx, rx) = std::sync::mpsc::channel();
     if output_dir.exists() {
         std::fs::remove_dir_all(&output_dir)?;
@@ -74,7 +74,7 @@ fn run_sanitization(
     ).context("Failed to run cassandra::library")?;
 
     // Consume channel synchronously to wait for processing to finish
-    let _has_errors = cassandra::log::logging_thread(
+    let (_has_errors, parse_time, write_time) = cassandra::log::logging_thread(
         &output_dir_arc,
         cassandra::log::LogLevel::Error, // Console logging level
         cassandra::log::LogLevel::Trace, // File logging level
@@ -95,7 +95,7 @@ fn run_sanitization(
         }
     }
 
-    Ok(reports)
+    Ok((reports, parse_time, write_time))
 }
 
 #[derive(serde::Serialize)]
@@ -122,8 +122,12 @@ struct ScalabilityMetric {
     threads: usize,
     small_duration_secs: f64,
     small_speedup: f64,
+    small_parse_secs: f64,
+    small_write_secs: f64,
     large_duration_secs: f64,
     large_speedup: f64,
+    large_parse_secs: f64,
+    large_write_secs: f64,
 }
 
 #[derive(serde::Serialize)]
@@ -171,7 +175,7 @@ fn main() -> Result<()> {
 
         let sources = vec![InputSource::File(file_path.clone())];
         let policy = Arc::new(Policy::default());
-        let reports = run_sanitization(
+        let (reports, _, _) = run_sanitization(
             &single_thread_rt,
             sources,
             policy,
@@ -279,7 +283,7 @@ fn main() -> Result<()> {
             let start = Instant::now();
             for _ in 0..*iterations {
                 let sources = vec![InputSource::File(path.clone())];
-                let _reports = run_sanitization(
+                let (_reports, _, _) = run_sanitization(
                     &single_thread_rt,
                     sources,
                     policy_arc.clone(),
@@ -344,7 +348,7 @@ fn main() -> Result<()> {
         
         // Run small workload
         let start_small = Instant::now();
-        let _reports_small = run_sanitization(
+        let (_reports_small, small_parse, small_write) = run_sanitization(
             &custom_rt,
             small_workload.clone(),
             policy.clone(),
@@ -359,7 +363,7 @@ fn main() -> Result<()> {
         
         // Run large workload
         let start_large = Instant::now();
-        let _reports_large = run_sanitization(
+        let (_reports_large, large_parse, large_write) = run_sanitization(
             &custom_rt,
             large_workload.clone(),
             policy,
@@ -372,15 +376,19 @@ fn main() -> Result<()> {
         }
         let large_speedup = if large_elapsed > 0.0 { large_base_duration / large_elapsed } else { 1.0 };
 
-        println!("  [Small] Duration: {:.3} s | Speedup: {:.2}x", small_elapsed, small_speedup);
-        println!("  [Large] Duration: {:.3} s | Speedup: {:.2}x", large_elapsed, large_speedup);
+        println!("  [Small] Duration: {:.3} s (Parse: {:.3}s, Write: {:.3}s) | Speedup: {:.2}x", small_elapsed, small_parse, small_write, small_speedup);
+        println!("  [Large] Duration: {:.3} s (Parse: {:.3}s, Write: {:.3}s) | Speedup: {:.2}x", large_elapsed, large_parse, large_write, large_speedup);
 
         scalability_metrics.push(ScalabilityMetric {
             threads,
             small_duration_secs: small_elapsed,
             small_speedup,
+            small_parse_secs: small_parse,
+            small_write_secs: small_write,
             large_duration_secs: large_elapsed,
             large_speedup,
+            large_parse_secs: large_parse,
+            large_write_secs: large_write,
         });
     }
 

@@ -159,7 +159,7 @@ pub fn logging_thread(
     sources: &[InputSource],
     max_subresources: usize,
     channel: Receiver<LoggerMessage>,
-) -> bool {
+) -> (bool, f64, f64) {
     use crate::errors::{SanitizationReport, SanitizerError};
 
     struct Subresource {
@@ -191,6 +191,7 @@ pub fn logging_thread(
     let width2 = (max_subresources as f64).log10().ceil() as usize;
     let mut has_errors = false;
 
+    let start_loop = std::time::Instant::now();
     for msg in channel {
         let Some(source) = sources.get_mut(msg.source) else {
             continue;
@@ -263,6 +264,7 @@ pub fn logging_thread(
             subresource.errors.push(err);
         }
     }
+    let loop_elapsed = start_loop.elapsed().as_secs_f64();
 
     // Partition tasks among a fixed number of threads matching hardware concurrency
     let num_threads = std::thread::available_parallelism()
@@ -277,6 +279,7 @@ pub fn logging_thread(
         thread_chunks[i % num_threads].push((i, source));
     }
 
+    let start_write = std::time::Instant::now();
     // Emit reports and log files in parallel using scoped threads
     std::thread::scope(|s| {
         for chunk in thread_chunks {
@@ -323,8 +326,9 @@ pub fn logging_thread(
             });
         }
     });
+    let write_elapsed = start_write.elapsed().as_secs_f64();
 
-    has_errors
+    (has_errors, loop_elapsed, write_elapsed)
 }
 
 #[cfg(test)]
@@ -415,7 +419,7 @@ mod tests {
         drop(tx);
 
         let sources = vec![InputSource::File(PathBuf::from("test_input.html"))];
-        let has_errors =
+        let (has_errors, _, _) =
             logging_thread(&temp_dir, LogLevel::Error, LogLevel::Trace, &sources, 1, rx);
         assert!(has_errors);
 

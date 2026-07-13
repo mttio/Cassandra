@@ -260,7 +260,7 @@ pub fn run(args: Args) -> Result<bool> {
 
     match library_result {
         Ok(_) => {
-            let has_errors = logging_thread(
+            let (has_errors, _, _) = logging_thread(
                 &output_dir,
                 logging_level,
                 LogLevel::Trace,

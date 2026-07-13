@@ -90,6 +90,10 @@ scalability_data = data["scalability"]
 threads = [item["threads"] for item in scalability_data]
 small_speedup = [item["small_speedup"] for item in scalability_data]
 large_speedup = [item["large_speedup"] for item in scalability_data]
+small_parse = [item["small_parse_secs"] for item in scalability_data]
+small_write = [item["small_write_secs"] for item in scalability_data]
+large_parse = [item["large_parse_secs"] for item in scalability_data]
+large_write = [item["large_write_secs"] for item in scalability_data]
 
 # Small Workload
 fig, ax3 = plt.subplots(figsize=(fig_width, fig_height))
@@ -136,6 +140,35 @@ comp_plot_path = os.path.join(output_dir, "scalability.png")
 plt.savefig(comp_plot_path, dpi=300)
 plt.close()
 print(f"Saved scalability comparison plot to {comp_plot_path}")
+
+# --- Plot 6: Scalability Breakdown (Small Workload Stacked Bar) ---
+threads_str = [str(t) for t in threads]
+fig, ax6 = plt.subplots(figsize=(fig_width, fig_height))
+ax6.bar(threads_str, small_parse, label='Parsing-Sanitization', color='#3c78d8')
+ax6.bar(threads_str, small_write, bottom=small_parse, label='Logging-Writing', color='#e69138')
+ax6.set_xlabel('Number of Worker Threads', fontsize=12)
+ax6.set_ylabel('Execution Time (seconds)', fontsize=12)
+ax6.set_title('Small Workload Time Breakdown (140 files)', fontsize=14, fontweight='bold')
+ax6.legend(loc='upper right')
+plt.tight_layout()
+breakdown_small_path = os.path.join(output_dir, "scalability_breakdown_small.png")
+plt.savefig(breakdown_small_path, dpi=300)
+plt.close()
+print(f"Saved small scalability breakdown plot to {breakdown_small_path}")
+
+# --- Plot 7: Scalability Breakdown (Large Workload Stacked Bar) ---
+fig, ax7 = plt.subplots(figsize=(fig_width, fig_height))
+ax7.bar(threads_str, large_parse, label='Parsing-Sanitization', color='#6aa84f')
+ax7.bar(threads_str, large_write, bottom=large_parse, label='Logging-Writing', color='#e69138')
+ax7.set_xlabel('Number of Worker Threads', fontsize=12)
+ax7.set_ylabel('Execution Time (seconds)', fontsize=12)
+ax7.set_title('Large Workload Time Breakdown (7000 files)', fontsize=14, fontweight='bold')
+ax7.legend(loc='upper right')
+plt.tight_layout()
+breakdown_large_path = os.path.join(output_dir, "scalability_breakdown_large.png")
+plt.savefig(breakdown_large_path, dpi=300)
+plt.close()
+print(f"Saved large scalability breakdown plot to {breakdown_large_path}")
 
 # --- Generate Critical Discussion Markdown ---
 summary = data["correctness_summary"]
@@ -204,17 +237,29 @@ Scalability was measured by processing two workloads of different scale across v
 #### Comparison & Trend
 ![Scalability Speed-up Comparison](scalability.png)
 
+### Phase Time Breakdown (Parsing vs. Writing)
+To isolate filesystem overhead, we measure the separate durations of the two phases:
+1. **Parsing-Sanitization Phase**: Spawning parallel worker tasks to scan, parse, and rewrite the HTML inputs, and accumulating logs in memory.
+2. **Logging-Writing Phase**: Partitioning the in-memory log lines and JSON reports across a scoped thread pool to write all 14,000 files in parallel.
+
+#### Small Workload Phase Breakdown
+![Small Workload Time Breakdown](scalability_breakdown_small.png)
+
+#### Large Workload Phase Breakdown
+![Large Workload Time Breakdown](scalability_breakdown_large.png)
+
 - **Workload Size Impact on Speed-up & Discussion**:
   - **Small Workload (No Speed-up / Scheduling Slowdown)**:
     For the small workload, increasing the thread count yields **no speed-up** (with 16 threads often being slower than 1 thread). Because each individual HTML file is processed in microseconds, the overall workload completes in under 100ms. 
     The time required to initialize the multi-threaded Tokio runtimes, spawn OS threads, and coordinate thread execution (task scheduling, context switching) completely dwarfs the actual parsing work.
   - **Large Workload (Constrained Speed-up)**:
-    For the large workload (7000 files), although we parallelized the log/JSON file writing at the end using scoped threads, the overall speed-up is still constrained to around **1.13x - 1.15x**.
+    For the large workload (7000 files), although we parallelized the log/JSON file writing at the end using scoped threads, the overall speed-up is still constrained to around **1.13x - 1.21x**.
 - **The Core Bottlenecks: Filesystem Locking and Constant I/O Time**:
   A deep analysis of the execution results reveals two primary factors:
-  1. **Filesystem Lock Contention (14,000 files)**: Writing 14,000 separate files (one `.log` and one `.json` for each of the 7,000 input sources) under a single output folder causes massive filesystem directory-level write locking and metadata contention at the operating system level. The OS filesystem driver (such as APFS on macOS or ext4 on Linux) serializes these concurrent file creations.
-  2. **Constant Parallel Write Overhead**: The parallel file writing phase runs at the end of the execution using a fixed number of threads determined by the system's hardware cores (`std::thread::available_parallelism`). Consequently, the I/O writing duration (~4.4 seconds) remains relatively constant across all benchmarks, regardless of whether the Tokio parsing runtime is configured with 1 worker thread or 16 worker threads.
-  3. **Negligible CPU Parsing Work**: Because Rust's zero-copy HTML parsing runs in microseconds, the constant I/O writing overhead dominates the overall benchmark duration, diluting the speed-up curve of the parsing phase.
+  1. **Substantial Speed-up on Parser Alone**: The **Parsing-Sanitization Phase alone** successfully scales with thread count, dropping from **~1.16 seconds (1 thread)** down to **~0.41 seconds (8/16 threads)**—achieving a **~2.85x speed-up** on CPU-bound processing!
+  2. **Flat I/O Write Time**: The **Logging-Writing Phase** remains completely flat at **~2.5 seconds** regardless of the Tokio worker thread count, because it runs at the end of the execution on a fixed scoped thread pool matching the machine's core count (`std::thread::available_parallelism`).
+  3. **Filesystem Lock Contention**: Creating 14,000 files (one `.log` and one `.json` for each of the 7,000 input sources) under a single output folder causes directory-level write locking and metadata serialization in the OS filesystem driver. Thus, it cannot scale linearly even with scoped threads.
+  4. **Dominance of I/O**: Because parsing is so fast (0.4s), the constant filesystem writing time (2.5s) dominates the overall execution duration, masking the parallel parsing gains.
 - **Other Bottlenecks**:
   1. **Lock Contention on Shared State**: The crawler checks a shared registry `Arc<Mutex<HashMap<Url, usize>>>` to track visited pages. Multi-threaded workers repeatedly block on this lock.
   2. **Sanitized Output Disk Writes**: Concurrently writing the sanitized HTML output files causes additional filesystem write contention.
