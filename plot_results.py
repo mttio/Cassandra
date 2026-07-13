@@ -255,10 +255,15 @@ To isolate filesystem overhead, we measure the separate durations of the two pha
   - **Large Workload (Constrained Speed-up)**:
     For the large workload (7000 files), although we consolidated the log/JSON file writing at the end, the overall speed-up is still constrained to around **1.27x**.
 - **The Core Bottlenecks: Filesystem Locking and Constant I/O Time**:
-  A deep analysis of the execution results reveals two primary factors:
+  A deep analysis of the execution results reveals three primary factors:
   1. **Substantial Speed-up on Parser Alone**: The **Parsing-Sanitization Phase alone** successfully scales with thread count, dropping from **~1.12 seconds (1 thread)** down to **~0.37 seconds (16 threads)**—achieving a **~3.05x speed-up** on CPU-bound processing!
   2. **Flat Writing Time (JSON Serialization)**: The **Logging-Writing Phase** remains completely flat at **~1.4 seconds** regardless of the Tokio worker thread count. Since it writes exactly 2 files, there is zero filesystem lock contention. However, CPU serialization of the massive 7,000-entry JSON report array using `serde_json::to_writer_pretty` takes a flat ~1.4 seconds.
   3. **Dominance of JSON Serialization**: Because parsing is so fast (0.36s), the constant JSON serialization time (1.4s) dominates the overall execution duration, masking the parallel parsing gains.
+- **Evolution of the Logging Architecture & Performance Optimization**:
+  During the development of this evaluation suite, we iteratively optimized the logging backend:
+  1. **Phase 1 (Individual Files, Sequential)**: Initially, we wrote a `.log` and `.json` file for every source sequentially during execution. For 7,000 sources, this caused 14,000 sequential file creations on the main thread, locking the overall speedup to ~1.13x.
+  2. **Phase 2 (Individual Files, Parallel Scoped Threads)**: We moved logging to memory buffering (which does not violate zero-copy policy for large files) and wrote all 14,000 files in parallel at the end using `std::thread::scope`. However, OS-level directory write locking and metadata contention still limited the speedup to ~1.15x.
+  3. **Phase 3 (Consolidated Files, Sequential)**: Finally, we consolidated the output into exactly 2 files: `cassandra.log` and `report.json`. This reduced the file count from 14,000 to 2, removing all filesystem contention. The remaining 1.4-second write duration is purely CPU serialization cost for the large JSON report, yielding a 1.27x overall speedup and a 3.05x speedup on the parser alone.
 - **Other Bottlenecks**:
   1. **Lock Contention on Shared State**: The crawler checks a shared registry `Arc<Mutex<HashMap<Url, usize>>>` to track visited pages. Multi-threaded workers repeatedly block on this lock.
   2. **Sanitized Output Disk Writes**: Concurrently writing the sanitized HTML output files causes additional filesystem write contention.
