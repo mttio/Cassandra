@@ -21,5 +21,8 @@ sha2 = "0.10.8"
 strip-ansi-escapes = "0.2.1"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
+tree-sitter = "0.26.11"
+tree-sitter-css = "0.25.0"
+tree-sitter-javascript = "0.25.0"
 unicode-normalization = "0.1.24"
 url = { version = "2.5.8", features = ["serde"] }

@@ -74,11 +74,6 @@ impl CrawlSession {
             .max_bytes
             .check(total_bytes, &self.logger)?;
 
-        logger.info(SanitizerMessage::CrawlingSubresource {
-            depth,
-            url: url.clone(),
-        });
-
         let fetched = self
             .client
             .fetch_raw(&url, logger, &self.policy, total_bytes)
@@ -136,19 +131,12 @@ impl CrawlSession {
                 }
                 sanitized_css.into_bytes()
             }
-            Some(KnownResourceType::Js) => {
-                let js_str = String::from_utf8_lossy(&fetched.data);
-                if let Some(x) =
-                    self.policy
-                        .resources
-                        .dangerous_js
-                        .check(&js_str, 0..js_str.len(), logger)?
-                {
-                    x.as_bytes().to_vec()
-                } else {
-                    fetched.data
-                }
-            }
+            Some(KnownResourceType::Js) => crate::resources::javascript::sanitize(
+                &fetched.data,
+                &self.logger,
+                &self.policy.resources.dangerous_js,
+            )?
+            .unwrap_or(fetched.data),
             Some(KnownResourceType::Pdf) => {
                 crate::resources::pdf::sanitize(
                     &fetched.data,
@@ -191,6 +179,11 @@ impl CrawlSession {
             logger.error(e);
             return;
         }
+
+        logger.info(SanitizerMessage::CrawlingSubresource {
+            depth,
+            url: url.clone(),
+        });
 
         let clone = Arc::clone(self);
         self.rt_handle.spawn(async move {
@@ -256,20 +249,15 @@ impl CrawlSession {
     fn process_js_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
         let output_path = self.output_dir.join(format!("{}.js", self.index()));
         let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
-        let js_str = String::from_utf8_lossy(&data);
 
-        let to_write = if let Some(x) =
-            self.policy
-                .resources
-                .dangerous_js
-                .check(&js_str, 0..js_str.len(), &self.logger)?
-        {
-            x.as_bytes().to_vec()
-        } else {
-            data
-        };
+        let data = crate::resources::javascript::sanitize(
+            &data,
+            &self.logger,
+            &self.policy.resources.dangerous_js,
+        )?
+        .unwrap_or(data);
 
-        fs::write(&output_path, to_write).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
+        fs::write(&output_path, data).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
 
         Ok(())
     }

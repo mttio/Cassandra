@@ -1,4 +1,11 @@
-use itertools::Itertools;
+use tree_sitter::Parser;
+
+use crate::{
+    errors::SanitizerError,
+    log::Log,
+    resources::traverse,
+    rules::{JsReplace, ReplaceRule},
+};
 
 /// Scans JS file for dangerous constructs (eval, document.write).
 ///
@@ -7,56 +14,81 @@ use itertools::Itertools;
 ///
 /// # Returns
 /// * `Result<(), SanitizationError>` - `Ok` if no dangerous keywords are found, otherwise an `Err` indicating what was found.
-pub fn sanitize(content: &str) -> Result<(), String> {
-    let mut chars = content.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == 'e' {
-            let mut temp = chars.clone();
-            if temp.next_array() == Some(['v', 'a', 'l']) {
-                while let Some(&next_c) = temp.peek() {
-                    if next_c.is_whitespace() {
-                        temp.next();
-                    } else {
-                        break;
-                    }
-                }
-                if temp.peek() == Some(&'(') {
-                    return Err("eval(...)".to_owned());
-                }
-            }
-        }
-        if c == 'd' {
-            let mut temp = chars.clone();
-            if temp.next_array() == Some(['o', 'c', 'u', 'm', 'e', 'n', 't']) {
-                let mut temp = temp.skip_while(|c| c.is_whitespace());
-                if temp.next() == Some('.') {
-                    let mut temp = temp.skip_while(|c| c.is_whitespace());
-                    if temp.next_array() == Some(['w', 'r', 'i', 't', 'e']) {
-                        return Err("document.write(...)".to_owned());
-                    }
-                }
-            }
-        }
-    }
+pub fn sanitize<'a>(
+    content: &'a [u8],
+    logger: &impl Log,
+    rule: &ReplaceRule<JsReplace>,
+) -> Result<Option<Vec<u8>>, SanitizerError> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_javascript::LANGUAGE.into())
+        .expect("Error loading grammar");
 
-    Ok(())
+    let tree = parser.parse(content, None).unwrap();
+    // traverse(0, content, cursor.node(), None, &mut cursor);
+
+    let mut replace_all = None;
+
+    traverse(tree.root_node(), &mut |node| {
+        if node.kind() == "call_expression"
+            && let Some(function) = node.child_by_field_name("function")
+        {
+            let dangerous =
+                if function.kind() == "identifier" && &content[function.byte_range()] == b"eval" {
+                    true
+                } else if function.kind() == "member_expression"
+                    && let Some(object) = function.child_by_field_name("object")
+                    && object.kind() == "identifier"
+                    && &content[object.byte_range()] == b"document"
+                    && let Some(property) = function.child_by_field_name("property")
+                    && property.kind() == "property_identifier"
+                    && &content[property.byte_range()] == b"write"
+                {
+                    true
+                } else {
+                    false
+                };
+
+            if dangerous
+                && let Some(replace) = rule.check(
+                    &String::from_utf8_lossy(&content[node.byte_range()]),
+                    node.byte_range(),
+                    logger,
+                )?
+            {
+                replace_all = Some(replace.into_bytes());
+            }
+        }
+
+        Ok::<_, SanitizerError>(())
+    })?;
+
+    Ok(replace_all)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::log::{LogLevel, NullLogger};
+
     use super::*;
 
     #[test]
     fn test_sanitize() {
-        assert!(sanitize("console.log('hello');").is_ok());
-        assert!(sanitize("eval('1 + 1');").is_err());
-        assert!(sanitize("document.write('xss');").is_err());
+        let logger = NullLogger;
+        let rule = ReplaceRule::keep(LogLevel::Error);
+
+        assert!(sanitize(b"console.log('hello');", &logger, &rule).is_ok());
+        assert!(sanitize(b"eval('1 + 1');", &logger, &rule).is_err());
+        assert!(sanitize(b"document.write('xss');", &logger, &rule).is_err());
     }
 
     #[test]
     fn test_sanitize_spaces() {
-        assert!(sanitize("eval    (  '1+1'  )").is_err());
-        assert!(sanitize("let evaluator = 1;").is_ok());
-        assert!(sanitize("document.write()").is_err());
+        let logger = NullLogger;
+        let rule = ReplaceRule::keep(LogLevel::Error);
+
+        assert!(sanitize(b"eval    (  '1+1'  )", &logger, &rule).is_err());
+        assert!(sanitize(b"let evaluator = 1;", &logger, &rule).is_ok());
+        assert!(sanitize(b"document.write()", &logger, &rule).is_err());
     }
 }

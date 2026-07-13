@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -393,7 +393,9 @@ mod tests {
 
         // Read and parse report
         let content = std::fs::read_to_string(&report_path).unwrap();
-        let report: SanitizationReport = serde_json::from_str(&content).unwrap();
+        let reports: Vec<SanitizationReport> = serde_json::from_str(&content).unwrap();
+        let report = &reports[0];
+
         assert_eq!(report.input, "test_input.html");
         assert_eq!(report.actions.len(), 1);
         assert!(matches!(

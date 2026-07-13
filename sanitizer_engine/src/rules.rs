@@ -26,9 +26,9 @@ impl Verify for JsReplace {
     }
 
     fn verify(value: &Self::Input<'_>) -> Option<RuleReplaceError> {
-        crate::resources::javascript::sanitize(value)
-            .err()
-            .map(|x| RuleReplaceError::DangerousJsConstruct { original: x })
+        Some(RuleReplaceError::DangerousJsConstruct {
+            original: (*value).to_owned(),
+        })
     }
 }
 

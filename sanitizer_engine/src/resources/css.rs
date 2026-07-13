@@ -1,8 +1,10 @@
+use tree_sitter::Parser;
 use url::Url;
 
 use crate::{
     errors::SanitizerError,
     log::Log,
+    resources::traverse,
     rules::{CssUrl, ReplaceRule},
 };
 
@@ -17,134 +19,96 @@ use crate::{
 ///   1. The rewritten CSS string with references updated to local filenames.
 ///   2. A vector of tuples pairing the fully resolved absolute URLs of discovered sub-resources with their generated local filenames.
 pub fn sanitize(
-    css: &str,
+    content: &str,
     base_url: &Url,
     logger: &impl Log,
     rule: &ReplaceRule<CssUrl>,
 ) -> Result<(String, Vec<(Url, String)>), SanitizerError> {
-    let mut output = String::new();
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_css::LANGUAGE.into())
+        .expect("Error loading grammar");
+
+    let tree = parser.parse(content, None).unwrap();
+
     let mut extracted = Vec::new();
-    let chars: Vec<char> = css.chars().collect();
-    let mut i = 0;
+    let mut replacements = Vec::new();
 
-    fn skip_whitespace(chars: &[char], i: &mut usize) {
-        while *i < chars.len() && chars[*i].is_whitespace() {
-            *i += 1;
-        }
-    }
-
-    fn read_url_string(chars: &[char], i: &mut usize, end: char) -> String {
-        let mut result = String::new();
-
-        skip_whitespace(chars, i);
-
-        let delimiter = match chars.get(*i) {
-            Some('"') => Some('"'),
-            Some('\'') => Some('\''),
-            _ => None,
-        };
-        if delimiter.is_some() {
-            *i += 1;
-        }
-
-        let mut previous_backslash = false;
-
-        while let Some(&c) = chars.get(*i) {
-            if delimiter == Some(c) && !previous_backslash {
-                *i += 1;
-                break;
-            }
-
-            if c == end && delimiter.is_none() && !previous_backslash {
-                *i += 1;
-                break;
-            }
-
-            if c == '\\' {
-                if previous_backslash {
-                    previous_backslash = false;
-                    result.push('\\');
-                } else {
-                    previous_backslash = !previous_backslash;
-                }
-            } else {
-                previous_backslash = false;
-                result.push(c);
-            }
-
-            *i += 1;
-        }
-
-        skip_whitespace(chars, i);
-
-        result
-    }
-
-    while i < chars.len() {
-        // Match @import
-        if i + 7 < chars.len()
-            && chars[i..i + 7] == ['@', 'i', 'm', 'p', 'o', 'r', 't']
-            && (chars[i + 7].is_whitespace() || chars[i + 7] == '(')
+    traverse(tree.root_node(), &mut |node| {
+        if node.kind() == "call_expression"
+            && let Some(function_name) = node.child(0)
+            && function_name.kind() == "function_name"
+            && &content[function_name.byte_range()] == "url"
+            && let Some(arguments) = node.child(1)
+            && arguments.kind() == "arguments"
+            && let Some(first) = arguments.child(1)
         {
-            i += 7;
-            skip_whitespace(&chars, &mut i);
-
-            let url = if i + 4 <= chars.len() && chars[i..i + 4] == ['u', 'r', 'l', '('] {
-                i += 4;
-                let url = read_url_string(&chars, &mut i, ')');
-
-                while let Some(&c) = chars.get(i)
-                    && c != ';'
-                {
-                    i += 1;
-                }
-                i += 1;
-
-                url
+            let value = if first.kind() == "string_value"
+                && let Some(string_content) = first.child(1)
+                && string_content.kind() == "string_content"
+            {
+                Some(string_content)
+            } else if first.kind() == "plain_value" {
+                Some(first)
             } else {
-                read_url_string(&chars, &mut i, ';')
+                None
             };
 
-            let url_clean = url.trim().to_string();
-            if !url_clean.is_empty()
-                && let Ok(resolved_url) = base_url.join(&url_clean)
+            if let Some(value) = value {
+                let url = content[value.byte_range()].trim();
+
+                if let Some(replace) = rule.check(url, value.byte_range(), logger)? {
+                    replacements.push((value.byte_range(), replace));
+                } else if let Ok(resolved) = base_url.join(url) {
+                    let ext = url
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("bin")
+                        .split('?')
+                        .next()
+                        .unwrap_or("bin");
+                    let local_name = super::generate_local_filename(&resolved, ext);
+                    replacements.push((value.byte_range(), local_name.clone()));
+                    extracted.push((resolved, local_name));
+                } else {
+                    replacements.push((value.byte_range(), String::new()));
+                }
+            }
+        }
+
+        if node.kind() == "import_statement"
+            && let Some(value) = node.child(1)
+        {
+            let value = if value.kind() == "string_value"
+                && let Some(string_content) = value.child(1)
+                && string_content.kind() == "string_content"
             {
-                let local_name = super::generate_local_filename(&resolved_url, "css");
-                extracted.push((resolved_url, local_name.clone()));
-                output.push_str(&format!("@import \"{}\";", local_name));
-            }
-            continue;
-        }
-
-        // Match url(
-        if i + 4 <= chars.len() && chars[i..i + 4] == ['u', 'r', 'l', '('] {
-            i += 4;
-            let offset = i;
-
-            let url = read_url_string(&chars, &mut i, ')');
-
-            let url_clean = url.trim().to_string();
-            if let Some(replace) = rule.check(&url_clean, offset..offset + url.len(), logger)? {
-                output.push_str(&format!("url(\"{replace}\")"));
-            } else if let Ok(resolved_url) = base_url.join(&url_clean) {
-                let ext = url_clean
-                    .rsplit('.')
-                    .next()
-                    .unwrap_or("bin")
-                    .split('?')
-                    .next()
-                    .unwrap_or("bin");
-                let local_name = super::generate_local_filename(&resolved_url, ext);
-                output.push_str(&format!("url(\"{}\")", local_name));
-                extracted.push((resolved_url, local_name));
+                Some(string_content)
+            } else if value.kind() == "plain_value" {
+                Some(value)
             } else {
-                output.push_str("url(\"\")");
+                None
+            };
+
+            if let Some(value) = value {
+                let url = content[value.byte_range()].trim();
+
+                if !url.is_empty()
+                    && let Ok(resolved) = base_url.join(url)
+                {
+                    let local_name = super::generate_local_filename(&resolved, "css");
+                    replacements.push((value.byte_range(), local_name.clone()));
+                    extracted.push((resolved, local_name));
+                }
             }
-            continue;
         }
 
-        output.push(chars[i]);
-        i += 1;
+        Ok::<_, SanitizerError>(())
+    })?;
+
+    let mut output = content.to_owned();
+    for (range, replacement) in replacements.into_iter().rev() {
+        output.replace_range(range, &replacement);
     }
 
     Ok((output, extracted))
@@ -167,8 +131,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(rewritten.contains("url(\"sub_"));
-        assert!(rewritten.contains("@import \"sub_"));
+        assert!(rewritten.contains("url('sub_"));
+        assert!(rewritten.contains("@import 'sub_"));
         assert_eq!(extracted.len(), 2);
         assert_eq!(
             extracted[0].0,
@@ -191,7 +155,7 @@ mod tests {
             &ReplaceRule::with_default(LogLevel::Warn),
         )
         .unwrap();
-        assert!(rewritten.contains("url(\"\")"));
+        assert!(rewritten.contains("url('')"));
         assert_eq!(extracted.len(), 0);
     }
 }

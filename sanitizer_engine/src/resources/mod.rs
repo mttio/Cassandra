@@ -3,7 +3,54 @@ pub mod javascript;
 pub mod mime;
 pub mod pdf;
 
+use colored::Colorize;
+use itertools::Itertools;
+use tree_sitter::Node;
 use url::Url;
+
+fn print_tree<'a>(
+    depth: usize,
+    source: &str,
+    node: Node<'a>,
+    name: Option<&str>,
+    cursor: &mut tree_sitter::TreeCursor<'a>,
+) {
+    println!(
+        "{}{} {} {}..{}: {}",
+        "  ".repeat(depth),
+        node.kind().to_string().bright_cyan(),
+        name.unwrap_or("<none>"),
+        node.start_position().to_string().bright_cyan(),
+        node.end_position().to_string().bright_cyan(),
+        source[node.byte_range()].bright_yellow(),
+    );
+
+    let children = node.children(cursor).collect_vec();
+    for (i, child) in children.into_iter().enumerate() {
+        print_tree(
+            depth + 1,
+            source,
+            child,
+            node.field_name_for_child(i as u32),
+            cursor,
+        );
+    }
+}
+
+fn traverse<'a, E>(
+    node: Node<'a>,
+    function: &mut impl FnMut(Node<'a>) -> Result<(), E>,
+) -> Result<(), E> {
+    function(node)?;
+
+    let mut child = node.child(0);
+    while let Some(x) = child {
+        traverse(x, function)?;
+        child = x.next_sibling();
+    }
+
+    Ok(())
+}
 
 /// Helper to generate a unique local filename deterministic for a URL.
 ///

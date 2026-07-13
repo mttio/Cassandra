@@ -151,7 +151,14 @@ mod tests {
         assert!(clean_css.contains("url(\"\")"));
 
         let js_file_data =
-            std::fs::read_to_string("../input_test_files/malicious/dangerous_script.js").unwrap();
-        assert!(crate::resources::javascript::sanitize(&js_file_data).is_err());
+            std::fs::read("../input_test_files/malicious/dangerous_script.js").unwrap();
+        assert!(
+            crate::resources::javascript::sanitize(
+                &js_file_data,
+                &logger,
+                &ReplaceRule::with_default(LogLevel::Error)
+            )
+            .is_err()
+        );
     }
 }
