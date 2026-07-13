@@ -205,8 +205,11 @@ impl From<RewritingError> for SanitizerError {
             RewritingError::ContentHandlerError(e) => {
                 // Extract the error returned inside the `element!()` macro
                 match e.downcast::<Self>() {
-                    Ok(e) => *e,
-                    Err(e) => Self::Other(e),
+                    Ok(err) => *err,
+                    Err(e) => match e.downcast::<RuleError>() {
+                        Ok(err) => Self::Rule(*err),
+                        Err(e) => Self::Other(e),
+                    }
                 }
             }
             RewritingError::MemoryLimitExceeded(e) => Self::Other(Box::new(e)),
