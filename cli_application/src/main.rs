@@ -82,6 +82,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+fn parse_log_level(s: &str) -> Result<LogLevel, String> {
+    match s.to_lowercase().as_str() {
+        "trace" => Ok(LogLevel::Trace),
+        "debug" => Ok(LogLevel::Debug),
+        "info" => Ok(LogLevel::Info),
+        "warn" | "warning" => Ok(LogLevel::Warn),
+        "error" => Ok(LogLevel::Error),
+        _ => Err(format!(
+            "invalid log level: '{}'. Expected one of: trace, debug, info, warn, error",
+            s
+        )),
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
@@ -104,6 +118,10 @@ pub struct Args {
     /// Verbose output. Specify multiple times to increase verbosity
     #[arg(short, long, action = ArgAction::Count)]
     pub verbose: u8,
+
+    /// Log level (trace, debug, info, warn, error)
+    #[arg(short = 'l', long = "log-level", value_parser = parse_log_level)]
+    pub log_level: Option<LogLevel>,
 
     /// Print the default policy
     #[arg(short, long)]
@@ -180,12 +198,13 @@ fn parse_inputs(inputs: Vec<String>) -> Result<Vec<InputSource>> {
 /// * `Result<bool>` - `Ok(true)` if clean/no blocklist errors, `Ok(false)` if blocked/denied content occurred, or an error if initialization fails.
 pub fn run(args: Args) -> Result<bool> {
     let policy = load_policy(args.policy.as_ref())?;
-    let logging_level = match args.verbose {
-        0 => LogLevel::Error,
-        1 => LogLevel::Warn,
-        2 => LogLevel::Info,
-        3 => LogLevel::Debug,
-        _ => LogLevel::Trace,
+    let logging_level = match args.log_level {
+        Some(level) => level,
+        None => match args.verbose {
+            0 => LogLevel::Info,
+            1 => LogLevel::Debug,
+            _ => LogLevel::Trace,
+        },
     };
 
     // Print argument summary
@@ -339,6 +358,18 @@ mod tests {
     #[test]
     fn test_missing_input_fails() {
         let result = Args::try_parse_from(["test"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_log_level_parsing() {
+        let args = Args::try_parse_from(["test", "input.html", "--log-level", "trace"]).unwrap();
+        assert_eq!(args.log_level, Some(LogLevel::Trace));
+
+        let args = Args::try_parse_from(["test", "input.html", "-l", "DEBUG"]).unwrap();
+        assert_eq!(args.log_level, Some(LogLevel::Debug));
+
+        let result = Args::try_parse_from(["test", "input.html", "-l", "invalid"]);
         assert!(result.is_err());
     }
 
