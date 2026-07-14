@@ -397,6 +397,27 @@ impl Verify for EventHandlers {
 
 #[nutype(
     derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    default = "<!-- Blocked by Web Sanitizer: XML entity found -->"
+)]
+pub struct XmlEntities(String);
+
+impl Verify for XmlEntities {
+    type Input<'a> = &'a str;
+    type Output = String;
+
+    fn to_output(&self) -> Self::Output {
+        self.as_ref().to_owned()
+    }
+
+    fn verify(value: &Self::Input<'_>) -> Option<RuleReplaceError> {
+        Some(RuleReplaceError::XmlEntityDeclaration {
+            original: (*value).to_owned(),
+        })
+    }
+}
+
+#[nutype(
+    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
     sanitize(with = |x| sanitize_attribute(&x)),
     default = "#"
 )]

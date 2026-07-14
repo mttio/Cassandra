@@ -11,6 +11,7 @@ use crate::resources::mime;
 use crate::resources::mime::KnownResourceType;
 use crate::resources::strip_jpeg_metadata;
 use crate::resources::strip_png_metadata;
+use crate::resources::xml::XmlReader;
 use crate::url::detect_idn;
 
 use parking_lot::Mutex;
@@ -292,8 +293,10 @@ impl CrawlSession {
 
         let mut rewriter =
             create_rewriter(&self.logger, &self.policy, &mut crawler_state, output_file);
+
+        let mut xml_reader = XmlReader::new(0);
+
         let mut buffer = [0; 8192];
-        let mut entity_scanner = crate::resources::EntityScanner::new();
         loop {
             let n = reader
                 .read(&mut buffer)
@@ -301,12 +304,11 @@ impl CrawlSession {
             if n == 0 {
                 break;
             }
-            if entity_scanner.feed_chunk(&buffer[..n]) {
-                drop(rewriter);
-                let _ = std::fs::remove_file(&output_path);
-                return Err(RuleError::XmlEntityDeclaration.into());
-            }
-            rewriter.write(&buffer[..n])?;
+
+            let to_write = xml_reader.next_chunk(&buffer[..n], &self.policy, &self.logger)?;
+
+            // let _ = std::fs::remove_file(&output_path);
+            rewriter.write(&to_write)?;
         }
         rewriter.end()?;
 

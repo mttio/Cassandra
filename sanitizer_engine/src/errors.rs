@@ -72,10 +72,7 @@ pub enum RuleError {
     #[error("Sub-resource crawl depth limit reached: max_requests = {}", max.pretty())]
     #[serde(rename = "subresources_too_deep")]
     MaxSubresourceDepth { max: usize },
-    #[error("custom XML entity declaration detected (potential XML bomb)")]
-    #[serde(rename = "xml_entity_declaration")]
-    XmlEntityDeclaration,
-    #[error("embedded active content ({original}) detected")]
+    #[error("embedded active content `{}`", original.pretty())]
     #[serde(rename = "active_content")]
     ActiveContent { original: String },
     #[error("Unknown resource type: `{}`", match mime {
@@ -129,6 +126,9 @@ pub enum RuleReplaceError {
     #[error("dangerous URI: `{}`", original.pretty())]
     #[serde(rename = "dangerous_uris")]
     DangerousUri { original: String },
+    #[error("custom XML entity declaration (potential XML bomb): `{}`", original.pretty())]
+    #[serde(rename = "xml_entity_declaration")]
+    XmlEntityDeclaration { original: String },
     #[error("IDN host: `{}`", original.pretty())]
     #[serde(rename = "idn")]
     Idn { original: String },

@@ -3,6 +3,7 @@ use crate::errors::{RuleError, SanitizerError};
 use crate::html::{CrawlerState, create_rewriter};
 use crate::log::{Log, LoggerMessage};
 use crate::policy::Policy;
+use crate::resources::xml::XmlReader;
 use crate::url::detect_idn;
 use std::path::Path;
 
@@ -284,18 +285,26 @@ impl SanitizerHttpClient {
 
         let mut stream = response.bytes_stream();
         let mut data = Vec::new();
-        let mut length = current_bytes;
-        let mut entity_scanner = crate::resources::EntityScanner::new();
 
-        while let Some(item) = stream.next().await {
-            let chunk = item.map_err(SanitizerError::Streaming)?;
-            length += chunk.len();
-            policy.resources.max_bytes.check(length, logger)?;
+        if is_xml_html_svg {
+            let mut xml_reader = XmlReader::new(current_bytes);
 
-            if is_xml_html_svg && entity_scanner.feed_chunk(&chunk) {
-                return Err(RuleError::XmlEntityDeclaration.into());
+            while let Some(item) = stream.next().await {
+                let chunk = item.map_err(SanitizerError::Streaming)?;
+
+                let to_write = xml_reader.next_chunk(&chunk, policy, logger)?;
+                data.extend(to_write);
             }
-            data.extend_from_slice(&chunk);
+        } else {
+            let mut length = current_bytes;
+            while let Some(item) = stream.next().await {
+                let chunk = item.map_err(SanitizerError::Streaming)?;
+
+                length += chunk.len();
+                policy.resources.max_bytes.check(length, logger)?;
+
+                data.extend(chunk);
+            }
         }
 
         Ok(FetchedContent { data, content_type })
@@ -352,7 +361,6 @@ impl SanitizerHttpClient {
         }
 
         let mut stream = response.bytes_stream();
-        let mut total_bytes = 0;
 
         let mut crawler_state = CrawlerState {
             base: url.clone(),
@@ -367,24 +375,12 @@ impl SanitizerHttpClient {
                 .map_err(|e| SanitizerError::CreateFile(output_path.to_owned(), e))?,
         );
 
-        let mut entity_scanner = crate::resources::EntityScanner::new();
+        let mut xml_reader = XmlReader::new(0);
+
         while let Some(item) = stream.next().await {
             let chunk = item.map_err(SanitizerError::Streaming)?;
-
-            total_bytes += chunk.len();
-            if let Err(e) = policy.resources.max_bytes.check(total_bytes, logger) {
-                drop(rewriter);
-                let _ = std::fs::remove_file(output_path);
-                return Err(e.into());
-            }
-
-            if entity_scanner.feed_chunk(&chunk) {
-                drop(rewriter);
-                let _ = std::fs::remove_file(output_path);
-                return Err(RuleError::XmlEntityDeclaration.into());
-            }
-
-            rewriter.write(&chunk)?;
+            let to_write = xml_reader.next_chunk(&chunk, policy, logger)?;
+            rewriter.write(&to_write)?;
         }
 
         rewriter.end()?;

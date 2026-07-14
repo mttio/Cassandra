@@ -3,6 +3,7 @@ allow_scripts = []
 allow_origins = ["trusted.com"]
 event_handlers = "info"
 dangerous_scripts = "error"
+xml_entities = "error"
 
 [urls]
 dangerous_domains = [
