@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::Range, path::PathBuf};
+use std::{error::Error, fmt::Display, ops::Range, path::PathBuf};
 
 use colored::Colorize;
 use hickory_resolver::net::NetError;
@@ -32,6 +32,14 @@ pub enum RuleError {
     #[error("too many redirects (max = {})", max.pretty())]
     #[serde(rename = "too_many_redirects")]
     TooManyRedirects { max: usize },
+    #[error(
+        "connecting to IDN host: `{}` {} `{}`",
+        original.pretty(),
+        "->".bright_yellow(),
+        converted.pretty(),
+    )]
+    #[serde(rename = "idn_connection")]
+    IdnConnection { original: String, converted: String },
     #[error("connecting to dangerous domain ({})", original.pretty())]
     #[serde(rename = "dangerous_domain_connection")]
     DangerousDomainConnection { original: Host },
@@ -121,7 +129,7 @@ pub enum RuleReplaceError {
     #[error("dangerous URI: `{}`", original.pretty())]
     #[serde(rename = "dangerous_uris")]
     DangerousUri { original: String },
-    #[error("IDN url: `{}`", original.pretty())]
+    #[error("IDN host: `{}`", original.pretty())]
     #[serde(rename = "idn")]
     Idn { original: String },
     #[error("Dangerous construct detected in JS: `{}`", original.pretty())]
@@ -149,8 +157,6 @@ pub enum SanitizerError {
     NonHttpsUrl,
     #[error("Server returned error status: {0}")]
     ServerStatus(reqwest::StatusCode),
-    #[error("Failed to fetch {} {}: {}", if *.2 { "sub-resource" } else { "url" }, .0, .1)]
-    UrlFetch(Url, Box<Self>, bool),
     #[error("Rewriting error: {0}")]
     Rewriting(#[source] RewritingError),
     #[error("Failed to open file: {0} ({1})")]
@@ -163,8 +169,8 @@ pub enum SanitizerError {
     WriteFile(PathBuf, std::io::Error),
     #[error("Error while streaming body: {0}")]
     Streaming(reqwest::Error),
-    #[error("Request failed for URL {0}: {1}")]
-    Request(Url, reqwest::Error),
+    #[error("Http request failed: {0}")]
+    Request(reqwest::Error),
     #[error("{0}")]
     Rule(#[source] RuleError),
     Other(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
@@ -204,13 +210,22 @@ impl From<RewritingError> for SanitizerError {
         match value {
             RewritingError::ContentHandlerError(e) => {
                 // Extract the error returned inside the `element!()` macro
-                match e.downcast::<Self>() {
-                    Ok(e) => *e,
+                match e.downcast::<RuleError>() {
+                    Ok(e) => Self::Rule(*e),
                     Err(e) => Self::Other(e),
                 }
             }
             RewritingError::MemoryLimitExceeded(e) => Self::Other(Box::new(e)),
             RewritingError::ParsingAmbiguity(e) => Self::Other(Box::new(e)),
+        }
+    }
+}
+
+impl From<reqwest::Error> for SanitizerError {
+    fn from(value: reqwest::Error) -> Self {
+        match value.source().and_then(|x| x.downcast_ref::<RuleError>()) {
+            Some(x) => Self::Rule(x.clone()),
+            None => Self::Request(value),
         }
     }
 }

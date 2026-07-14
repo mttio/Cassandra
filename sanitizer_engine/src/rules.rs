@@ -154,6 +154,33 @@ impl<R: Default + Verify> ReplaceRule<R> {
     }
 }
 
+impl<R: Default + ToString> ReplaceRule<R> {
+    pub fn handle(
+        &self,
+        offset: Range<usize>,
+        error: RuleReplaceError,
+        logger: &impl Log,
+    ) -> Result<Option<String>, RuleError> {
+        if self.level == LogLevel::Error {
+            Err(RuleError::Replace {
+                inner: error,
+                replacement: None,
+                offset,
+            })
+        } else {
+            let replacement = self.replace.as_ref().map(R::to_string);
+            logger.log(
+                self.level,
+                RuleError::Replace {
+                    inner: error,
+                    replacement: replacement.clone(),
+                    offset,
+                },
+            );
+            Ok(replacement)
+        }
+    }
+}
 impl<'de, R: Default + Deserialize<'de>> Deserialize<'de> for ReplaceRule<R> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -283,7 +310,7 @@ impl Verify2 for MaxRedirects {
     fn verify(&self, value: &Self::Input<'_>) -> Option<RuleError> {
         // Log only the first time we hit the limit
         if value > self.as_ref() {
-            Some(RuleError::ContentTooLong {
+            Some(RuleError::TooManyRedirects {
                 max: *self.as_ref(),
             })
         } else {
@@ -336,26 +363,11 @@ pub fn sanitize_attribute(s: &str) -> String {
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq, Display),
     sanitize(with = |x| sanitize_attribute(&x)),
     default = "#"
 )]
 pub struct Idn(String);
-
-impl Verify for Idn {
-    type Input<'a> = &'a Url;
-    type Output = String;
-
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
-    }
-
-    fn verify(value: &Self::Input<'_>) -> Option<RuleReplaceError> {
-        crate::url::check_domain(value).map(|x| RuleReplaceError::Idn {
-            original: x.to_string(),
-        })
-    }
-}
 
 #[nutype(
     derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),

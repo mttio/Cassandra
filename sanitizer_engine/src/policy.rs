@@ -80,8 +80,10 @@ pub struct UrlsPolicy {
     /// List of domains considered dangerous
     /// Ignores prefix labels (e.g. `youtube.com` matches `www.youtube.com`)
     pub dangerous_domains: Vec<PolicyHost>,
-    /// Action to perform when a non-latin url is encountered
+    /// Action to perform when a IDN url is found in a file
     pub idn: ReplaceRule<rules::Idn>,
+    /// Action to perform when connecting to a IDN url
+    pub idn_connection: LogLevel,
 }
 
 impl Default for UrlsPolicy {
@@ -93,6 +95,7 @@ impl Default for UrlsPolicy {
                 .map(PolicyHost)
                 .collect(),
             idn: ReplaceRule::with_default(LogLevel::Warn),
+            idn_connection: LogLevel::Warn,
         }
     }
 }

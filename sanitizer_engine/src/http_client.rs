@@ -3,6 +3,7 @@ use crate::errors::{RuleError, SanitizerError};
 use crate::html::{CrawlerState, create_rewriter};
 use crate::log::{Log, LoggerMessage};
 use crate::policy::Policy;
+use crate::url::detect_idn;
 use std::path::Path;
 
 use futures_util::StreamExt;
@@ -184,8 +185,16 @@ impl SanitizerHttpClient {
 
                 let logger = (index, &channel);
 
-                let check = || -> Result<(), SanitizerError> {
-                    policy.urls.idn.check(attempt.url(), 0..0, &logger)?;
+                let check = || -> Result<(), RuleError> {
+                    if let Some((original, converted)) = detect_idn(attempt.url()) {
+                        policy.urls.idn_connection.handle(
+                            &logger,
+                            RuleError::IdnConnection {
+                                original: original.to_owned(),
+                                converted: converted.to_owned(),
+                            },
+                        )?;
+                    }
 
                     policy
                         .connections
@@ -234,12 +243,7 @@ impl SanitizerHttpClient {
             return Err(SanitizerError::NonHttpsUrl);
         }
 
-        let response = self
-            .client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|e| SanitizerError::Request(url.clone(), e))?;
+        let response = self.client.get(url.clone()).send().await?;
 
         if !response.status().is_success() {
             return Err(SanitizerError::ServerStatus(response.status()));
@@ -315,12 +319,7 @@ impl SanitizerHttpClient {
             return Err(SanitizerError::NonHttpsUrl);
         }
 
-        let response = self
-            .client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|e| SanitizerError::Request(url.clone(), e))?;
+        let response = self.client.get(url.clone()).send().await?;
 
         if !response.status().is_success() {
             return Err(SanitizerError::ServerStatus(response.status()));

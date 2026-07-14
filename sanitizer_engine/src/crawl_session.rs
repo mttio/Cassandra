@@ -11,6 +11,7 @@ use crate::resources::mime;
 use crate::resources::mime::KnownResourceType;
 use crate::resources::strip_jpeg_metadata;
 use crate::resources::strip_png_metadata;
+use crate::url::detect_idn;
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -82,8 +83,7 @@ impl CrawlSession {
         let fetched = self
             .client
             .fetch_raw(&url, logger, &self.policy, total_bytes)
-            .await
-            .map_err(|e| SanitizerError::UrlFetch(url.clone(), Box::new(e), false))?;
+            .await?;
 
         {
             let mut total_bytes = self.total_bytes.lock();
@@ -319,21 +319,28 @@ impl CrawlSession {
 
     /// Worker task fetching a remote HTML document, sanitizing it, and enqueuing referenced sub-resources.
     pub async fn process_url(self: Arc<Self>, url: Url) {
-        if let Err(e) = self.policy.urls.idn.check(&url, 0..0, &self.logger) {
+        if let Some((original, replacement)) = detect_idn(&url)
+            && let Err(e) = self.policy.urls.idn_connection.handle(
+                &self.logger,
+                RuleError::IdnConnection {
+                    original: original.to_owned(),
+                    converted: replacement.to_owned(),
+                },
+            )
+        {
             self.logger.error(e);
             return;
         }
 
-        if let Some(host) = url.host().map(|x| x.to_owned()) {
-            if let Err(e) = self
+        if let Some(host) = url.host().map(|x| x.to_owned())
+            && let Err(e) = self
                 .policy
                 .connections
                 .dangerous_domain
                 .check((&host, &self.policy.urls.dangerous_domains), &self.logger)
-            {
-                self.logger.error(e);
-                return;
-            }
+        {
+            self.logger.error(e);
+            return;
         }
 
         let index = self.index();
@@ -348,9 +355,8 @@ impl CrawlSession {
             subresources: discovered,
         } = match fetch_result {
             Ok(res) => res,
-            Err(error) => {
-                self.logger
-                    .error(SanitizerError::UrlFetch(url, Box::new(error), false));
+            Err(e) => {
+                self.logger.error(e);
                 return;
             }
         };

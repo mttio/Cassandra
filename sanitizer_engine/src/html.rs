@@ -8,11 +8,7 @@ use parking_lot::Mutex;
 use std::{io::Write, ops::Range, sync::Arc};
 use url::Url;
 
-use crate::{
-    errors::{RuleError, SanitizerError},
-    log::Log,
-    policy::Policy,
-};
+use crate::{errors::RuleError, log::Log, policy::Policy, url::detect_idn};
 
 fn handle_dangerous_link_2(
     value: &str,
@@ -21,7 +17,7 @@ fn handle_dangerous_link_2(
     policy: &Policy,
     logger: &impl Log,
     mut replace: impl FnMut(&str),
-) -> Result<Option<Url>, SanitizerError> {
+) -> Result<Option<Url>, RuleError> {
     use unicode_normalization::UnicodeNormalization;
     let value = value.nfc().collect::<String>();
 
@@ -29,20 +25,20 @@ fn handle_dangerous_link_2(
     if let Ok(mut resolved) = resolved
     // && resolved.scheme() == "https"
     {
-        if let Some(host) = resolved.host() {
-            // Check IDN
-            match policy.urls.idn.check(&resolved, location.clone(), logger) {
-                Ok(Some(r)) => {
-                    replace(&r);
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    logger.error(e);
-                    replace("");
-                    return Ok(None);
-                }
-            }
+        // Check IDN
+        if let Some((original, _)) = detect_idn(&resolved)
+            && let Some(r) = policy.urls.idn.handle(
+                location.clone(),
+                crate::errors::RuleReplaceError::Idn {
+                    original: original.to_owned(),
+                },
+                logger,
+            )?
+        {
+            replace(&r);
+        }
 
+        if let Some(host) = resolved.host() {
             let host = host.to_owned();
 
             match policy.html.dangerous_domain.check(
@@ -92,7 +88,7 @@ fn handle_dangerous_link(
     base_url: &Url,
     policy: &Policy,
     logger: &impl Log,
-) -> Result<Option<Url>, SanitizerError> {
+) -> Result<Option<Url>, RuleError> {
     if let Some(attribute) = el.attributes().iter().find(|x| x.name() == attr_name) {
         let location = attribute
             .value_source_location()
