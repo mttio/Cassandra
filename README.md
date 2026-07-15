@@ -4,7 +4,7 @@ Cassandra is a high-performance web sanitization engine and parallel crawling pi
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -51,7 +51,7 @@ cargo run -- <inputs> [flags]
    cargo run -- input_test_files/malicious --policy my_policy.toml -vvv
    ```
 
-## 🧪 Running Tests
+## Running Tests
 
 To run the complete test suite verifying the HTML tokenizer, resource sanitizers (PDF, CSS, JS, MIME), SSRF client, and logger loop:
 
@@ -61,7 +61,7 @@ cargo test
 
 ---
 
-## 📊 Running the Experimental Evaluation Suite
+## Running the Experimental Evaluation Suite
 
 Cassandra features an integrated benchmarking suite to measure correctness, performance, thread scalability, and memory usage.
 
@@ -94,10 +94,9 @@ python3 plot_results.py
 - `output_test/scalability_small.png` (Speedup on 140 files)
 - `output_test/scalability_large.png` (Speedup on 7000 files)
 - `output_test/scalability.png` (Combined speedup comparison)
-- `output_test/discussion.md` (Detailed architectural analysis and findings)
 
 ---
 
-## 📄 Final Report
+## Final Report
 
 For a complete and comprehensive analysis of the project requirements, architecture, Rust systems programming features, evaluation results, and limitations assessment, refer to the [docs/REPORT.md](file:///Users/matteoberga/Polito/programm/API%20Programming/final%20project/cassandra/docs/REPORT.md) final report.

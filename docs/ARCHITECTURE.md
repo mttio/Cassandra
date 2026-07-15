@@ -31,11 +31,14 @@ cassandra/ (Workspace Root)
 │           ├── mod.rs
 │           ├── css.rs
 │           ├── javascript.rs
-│           └── mime.rs
+│           ├── mime.rs
+│           └── pdf.rs
 └── cli_application/ (Binary Crate: cli_application)
     ├── Cargo.toml
     └── src/
-        └── main.rs
+        ├── main.rs
+        └── bin/
+            └── evaluation_runner.rs
 ```
 
 - **`cassandra` (Library Crate)**: Contains the core sanitization, URL resolution, HTTP parsing, MIME sniffing, and recursive crawler logic. Exposes a programmatic API.
@@ -74,7 +77,7 @@ HTML parsing is built on top of `lol_html`, a fast, streaming CSS-selector-based
 - **MIME Sniffer (`mime.rs`)**: Inspects magic numbers at the beginning of fetched files to assert their real type (HTML, CSS, JS, JPEG, PNG, PDF) matching the server-declared type.
 - **CSS Sanitizer (`css.rs`)**: Strips unsafe `url()` imports and expressions pointing to external or unapproved origins.
 - **JS Sanitizer (`javascript.rs`)**: Inspects script contents for dangerous keywords (e.g. `eval`) and active script injection.
-- **PDF Active Content Scanner (`mod.rs`)**: Scans PDF structure definitions for active elements (like internal `JavaScript`, `/JS`, or `/OpenAction` directives) that could trigger actions inside PDF viewers.
+- **PDF Active Content Scanner (`pdf.rs`)**: Scans PDF structure definitions for active elements (like internal `JavaScript`, `/JS`, or `/OpenAction` directives) that could trigger actions inside PDF viewers.
 - **Image Metadata Stripper (`mod.rs`)**: Strips EXIF headers and chunks from JPEG and PNG files to block tracking vectors.
 
 ### 2.6 Declarative Policies (`policy.rs`, `rules.rs`, `url.rs`)
