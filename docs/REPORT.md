@@ -299,7 +299,7 @@ La scalabilità è stata misurata elaborando due diversi tipi di carico di lavor
 
 #### Osservazioni:
 *   **Speedup del Parser**: La fase CPU-bound di parsing ed elaborazione si dimostra altamente scalabile all'aumentare dei thread. Nel carico di grandi dimensioni, il tempo del parser si riduce da **0,785s** (con 1 thread) a soli **0,359s** (con 16 thread), garantendo uno **speedup effettivo pari a 2,19x**.
-*   **Collo di Bottiglia di Scrittura**: La fase di logging e scrittura sul disco (scrittura dei log consolidati e serializzazione del JSON) rimane costante a circa **1,4s - 1,5s** in tutte esecuzioni. Poiché il thread di logging opera in modo strettamente sequenziale, questa operazione limita la scalabilità massima complessiva dell'intero sistema.
+*   **Collo di Bottiglia di Scrittura**: La fase di logging e scrittura sul disco (scrittura dei log consolidati e serializzazione del JSON) rimane costante a circa **1,4s - 1,5s** in tutte le esecuzioni. Poiché il thread di logging opera in modo strettamente sequenziale, questa operazione limita la scalabilità massima complessiva dell'intero sistema.
 *   **Overhead di Scheduling**: Per carichi piccoli, i tempi necessari all'inizializzazione del runtime parallelo e al context switch tra i thread rischiano di superare i benefici pratici dell'elaborazione concorrente.
 
 ### 4.4 Consumo di Risorse
