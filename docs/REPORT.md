@@ -79,10 +79,11 @@ cassandra/ (Workspace Root)
 │       ├── rules.rs          <-- Definizioni delle regole
 │       ├── url.rs            <-- Verifica URL e IDN
 │       └── resources/        <-- Sanitizzatori Specifici per Risorse
-│           ├── mod.rs        <-- Scanner Metadati Immagini e PDF
+│           ├── mod.rs        <-- Scanner Metadati Immagini e Rimozione EXIF
 │           ├── css.rs        <-- Sanitizzatore CSS
 │           ├── javascript.rs <-- Scanner Parole Chiave JS
-│           └── mime.rs       <-- Rilevatore Magic Number (Sniffer)
+│           ├── mime.rs       <-- Rilevatore Magic Number (Sniffer)
+│           └── pdf.rs        <-- Scanner Contenuti Attivi PDF
 └── cli_application/          <-- Crate Frontend CLI (cli_application)
     ├── Cargo.toml
     └── src/
