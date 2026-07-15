@@ -39,7 +39,7 @@ cassandra/ (Workspace Root)
 ```
 
 - **`cassandra` (Library Crate)**: Contains the core sanitization, URL resolution, HTTP parsing, MIME sniffing, and recursive crawler logic. Exposes a programmatic API.
-- **`cli_application` (Binary Crate)**: Wraps the library crate, parses CLI arguments (using `clap`), maps paths, and displays colored terminal progress indicators.
+- **`cli_application` (Binary Crate)**: Wraps the library crate, parses command-line arguments using `clap` (supporting multiple inputs, custom TOML `--policy`, `--output-dir`, and multi-threaded `--workers`), maps input paths recursively, controls output verbosity via incremental `-v` flags, and exits with a non-zero exit code if any policy block/error occurs during sanitization.
 
 ---
 
@@ -88,12 +88,9 @@ Implementations leverage the `Verify` trait, separating verification definitions
 
 ### 2.7 Structured Reporting Loop (`log.rs`, `errors.rs`)
 - **Channel-based Logging**: Individual workers log events asynchronously through an `mpsc::Sender` channel to a single sequential thread (`logging_thread`).
-- **Audit JSON Report**: The logging thread records each mapped `SanitizerError` into a structured `SanitizationEvent`. At the end of execution, it outputs a pretty-printed audit JSON report (`{index}.json`) mapping:
-  - The matched rule.
-  - The tag/context.
-  - The character byte offsets in the source document.
-  - The original code snippet.
-  - The replacement value (if applicable).
+- **Audit JSON Report**: The logging thread records each mapped `RuleError` into a structured `SanitizationReport`. At the end of execution, it consolidates all reports and logs, writing a single pretty-printed audit JSON report (`report.json`) and a unified log file (`cassandra.log`) in the output directory. The report maps:
+  - The input source path or URL.
+  - A list of occurred sanitization actions containing the matched rule, the specific replacement, context, and byte offsets.
 
 ---
 

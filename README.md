@@ -10,7 +10,7 @@ Cassandra is a high-performance web sanitization engine and parallel crawling pi
 
 To build and run the application, ensure you have the following installed:
 - [Rust](https://www.rust-lang.org/) (2024 edition)
-- [Python 3](https://www.python.org/) with `matplotlib` (only required for running the plotting evaluation script)
+- [Python 3](https://www.python.org/) with `matplotlib` and `numpy` (only required for running the plotting evaluation script)
 
 ---
 
@@ -51,21 +51,38 @@ cargo run -- <inputs> [flags]
    cargo run -- input_test_files/malicious --policy my_policy.toml -vvv
    ```
 
+## 🧪 Running Tests
+
+To run the complete test suite verifying the HTML tokenizer, resource sanitizers (PDF, CSS, JS, MIME), SSRF client, and logger loop:
+
+```bash
+cargo test
+```
+
 ---
 
 ## 📊 Running the Experimental Evaluation Suite
 
 Cassandra features an integrated benchmarking suite to measure correctness, performance, thread scalability, and memory usage.
 
-### 1. Run the Evaluation Runner
-The evaluation binary runs correctness validations against a documented ground truth, benchmarks parsing throughput/latency across varying file sizes, measures thread speed-up scaling, and tracks peak memory usage.
+### 1. Prerequisites for Plotting
+Ensure Python 3 is installed along with the required libraries:
+```bash
+pip install matplotlib numpy
+```
+
+### 2. Run the Evaluation Runner
+The evaluation binary runs correctness validations against a documented ground truth, benchmarks parsing throughput/latency across varying file sizes, measures thread speed-up scaling, and tracks peak memory usage:
 
 ```bash
-cargo run --bin evaluation_runner
+cargo run --release --bin evaluation_runner
 ```
+> [!NOTE]
+> Running the evaluation runner in `--release` mode is highly recommended for accurate performance and scalability measurements.
+
 *Outputs:* Saves the raw metric data as a structured JSON file at `output_test/evaluation_results.json`.
 
-### 2. Generate Plots and Reports
+### 3. Generate Plots and Reports
 To render the visual charts (latency, throughput, and small/large workload scalability speed-up curves) and compile the critical discussion report:
 
 ```bash
@@ -78,3 +95,9 @@ python3 plot_results.py
 - `output_test/scalability_large.png` (Speedup on 7000 files)
 - `output_test/scalability.png` (Combined speedup comparison)
 - `output_test/discussion.md` (Detailed architectural analysis and findings)
+
+---
+
+## 📄 Final Report
+
+For a complete and comprehensive analysis of the project requirements, architecture, Rust systems programming features, evaluation results, and limitations assessment, refer to the [docs/REPORT.md](file:///Users/matteoberga/Polito/programm/API%20Programming/final%20project/cassandra/docs/REPORT.md) final report.

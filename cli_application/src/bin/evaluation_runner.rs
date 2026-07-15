@@ -273,6 +273,8 @@ fn main() -> Result<()> {
         for fetch_sub in &[false, true] {
             let mut policy = Policy::default();
             policy.resources.fetch_sub_resources = *fetch_sub;
+            policy.resources.max_requests = serde_json::from_str("{\"value\": 100, \"level\": \"error\"}").unwrap();
+            policy.resources.max_bytes = serde_json::from_str("{\"value\": 52428800, \"level\": \"error\"}").unwrap();
             let policy_arc = Arc::new(policy);
 
             println!("Running performance test for {} (fetch_subresources={})...", name, fetch_sub);
