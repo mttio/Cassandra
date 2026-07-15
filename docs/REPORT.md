@@ -5,8 +5,8 @@
 **Cassandra Web Sanitizer** è un tool di sicurezza difensivo scritto in Rust. Funge da livello di sanitizzazione intermedio intercettando pagine web non attendibili tramite link, strutture di file locali e risorse scaricate dalla rete, per poi neutralizzare o riscrivere potenziali elementi pericolosi prima che possano causare danni all'utente.
 
 Cassandra è progettato come un sistema modulare composto da due componenti:
-1. Una libreria riutilizzabile (`sanitizer_engine`) che implementa il motore di scansione, i crawler di rete ricorsivi, il rilevamento dei file tramite magic-number (sniffing), i riscrittori di flusso (stream rewriter) e i parser di documenti.
-2. Un'applicazione da riga di comando (`cli_application`) che permette di utilizzare la libreria di sanitizzazione attraverso un'interfaccia grafica.
+1. Una libreria riutilizzabile (`sanitizer_engine`) che implementa il motore di scansione, i crawler di rete ricorsivi, il rilevamento dei file tramite magic-number (sniffing), i riscrittori di flusso (stream rewriter), i parser di documenti...
+2. Un'applicazione da riga di comando (`cli_application`) che permette di utilizzare la libreria di sanitizzazione attraverso un'interfaccia grafica da linea di comando.
 
 La progettazione si affida interamente a **safe Rust**, impiegando una tecnica di **token streaming zero-copy** (utilizzando `lol_html`) al fine di evitare il sovraccarico prestazionale e le vulnerabilità di sicurezza legate alla materializzazione di interi alberi DOM in memoria. Per valutarne l'efficacia, Cassandra è stato testato rispetto a una suite di test contenente sia pagine benigne che risorse pericolose (XSS, XML entity bomb, elementi PDF attivi, confusione omografa IDN, SSRF e MIME confusion). La valutazione sperimentale mostra che Cassandra ottiene un **tasso di rilevamento del 100%** sul corpus malevolo, mantenendo un footprint di memoria di picco estremamente ridotto pari a **45,41 MB** e dimostrando una buona scalabilità su CPU parallele, limitata tuttavia dalla fase sequenziale di serializzazione del log.
 
@@ -208,7 +208,7 @@ Cassandra è scritto interamente in safe Rust per ridurre al minimo i bug di mem
 
 La valutazione sperimentale è stata condotta su un sistema macOS eseguendo `cli_application/src/bin/evaluation_runner.rs` ed elaborando i grafici tramite `plot_results.py`.
 
-### 4.1 Profilo di Correttezza
+### 4.1 Correttezza
 
 La correttezza del motore di sanitizzazione è stata valutata rispetto a una serie di dati reali rappresentanti una vasta gamma di minacce: cross-site scripting (XSS), XML bomb, IDN, richieste di rete SSRF, bypass di fogli di stile CSS ed elementi binari attivi (PDF con codice JavaScript).
 
@@ -241,9 +241,10 @@ La correttezza del motore di sanitizzazione è stata valutata rispetto a una ser
 
 > **Analisi dei Falsi Positivi**: Il file `benign/crawler_test.html` ha attivato la regola `dangerous_scripts` in quanto conteneva uno script inline non presente nella whitelist predefinita. Poiché il parser è configurato in modalità strettamente difensiva, qualsiasi blocco di script non espressamente approvato viene categorizzato come non sicuro e sanitizzato, producendo un falso positivo sui siti che usano codice inline senza aver registrato gli opportuni hash.
 
-### 4.2 Analisi delle Prestazioni (Latenza vs Dimensione dell'Input)
+### 4.2 Performance (Latenza vs Dimensione dell'Input)
 
 Il throughput e la latenza sono stati misurati utilizzando file HTML sicuri con dimensioni variabili da 10KB a 5MB, abilitando e disabilitando il caricamento delle risorse remote collegate.
+Le tabelle seguenti misurano la latenza per-input in *ms*, e il throughput in *inputs per second*.
 
 | Dimensione | Latenza (No Fetch) | Throughput (No Fetch) | Latenza (Con Fetch) | Throughput (Con Fetch) |
 | :--- | :--- | :--- | :--- | :--- |
@@ -259,8 +260,8 @@ Il throughput e la latenza sono stati misurati utilizzando file HTML sicuri con 
 ![Throughput vs Dimensione](../output_test/perf_throughput.png)
 
 #### Osservazioni:
-*   **Andamento Lineare ($O(N)$)**: Quando opera esclusivamente come parser locale (senza scaricare le risorse remote), la latenza scala in modo perfettamente lineare rispetto alla dimensione del file. Questo comportamento riflette l'approccio a passata singola di `lol_html`, che elabora il flusso in tempo costante.
-*   **Impatto dell'I/O di Rete**: Il recupero delle sottorisorse introduce colli di bottiglia legati all'I/O di rete. Negli scenari reali, l'attesa dei server remoti causa ritardi a causa di risoluzioni DNS, handshake TLS e latenze di trasmissione dei dati, riducendo drasticamente il throughput complessivo.
+*   **Andamento Lineare ($O(N)$)**: Quando opera esclusivamente come parser locale (senza scaricare le risorse remote), la latenza scala in modo lineare rispetto alla dimensione del file. Questo comportamento riflette l'approccio a passata singola di `lol_html` e l'efficienza della nostra implementazione zero-copy.
+*   **Impatto dell'I/O di Rete e Scalabilità dei Collegamenti**: Il recupero delle sottorisorse introduce un evidente collo di bottiglia dovuto all'I/O di rete. Poiché il numero di risorse collegate scala con la dimensione dell'input (da 2 risorse a 10KB fino a 60 risorse a 5MB), la latenza di rete non è costante, ma cresce significativamente (da **181 ms** fino a oltre **1,68 secondi**). Questo dimostra che nei contesti di produzione il costo di rete domina completamente il tempo di elaborazione, superando di oltre un ordine di grandezza la CPU-bound locale.
 
 ### 4.3 Scalability ed Efficienza della Pipeline Parallela
 
