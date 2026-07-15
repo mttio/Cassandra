@@ -1,3 +1,4 @@
+
 # Cassandra Web Sanitizer - Report Programmazione di Sistema
 
 ## Introduzione
@@ -8,7 +9,7 @@ Cassandra è progettato come un sistema modulare composto da due componenti:
 1. Una libreria riutilizzabile (`sanitizer_engine`) che implementa il motore di scansione, i crawler di rete ricorsivi, il rilevamento dei file tramite magic-number (sniffing), i riscrittori di flusso (stream rewriter), i parser di documenti...
 2. Un'applicazione da riga di comando (`cli_application`) che permette di utilizzare la libreria di sanitizzazione attraverso un'interfaccia grafica da linea di comando.
 
-La progettazione si affida interamente a **safe Rust**, impiegando una tecnica di **token streaming zero-copy** (utilizzando `lol_html`) al fine di evitare il sovraccarico prestazionale e le vulnerabilità di sicurezza legate alla materializzazione di interi alberi DOM in memoria. Per valutarne l'efficacia, Cassandra è stato testato rispetto a una suite di test contenente sia pagine benigne che risorse pericolose (XSS, XML entity bomb, elementi PDF attivi, confusione omografa IDN, SSRF e MIME confusion). La valutazione sperimentale mostra che Cassandra ottiene un **tasso di rilevamento del 100%** sul corpus malevolo, mantenendo un footprint di memoria di picco estremamente ridotto pari a **45,41 MB** e dimostrando una buona scalabilità su CPU parallele, limitata tuttavia dalla fase sequenziale di serializzazione del log.
+La progettazione si affida interamente a **safe Rust**, impiegando una tecnica di **token streaming zero-copy** (utilizzando `lol_html`) al fine di evitare il sovraccarico prestazionale e le vulnerabilità di sicurezza legate alla materializzazione di interi alberi DOM in memoria. Per valutarne l'efficacia, Cassandra è stato testato rispetto a una suite di test contenente sia pagine benigne che risorse pericolose (XSS, XML entity bomb, elementi PDF attivi, confusione omografa IDN, SSRF e MIME confusion). La valutazione sperimentale mostra che Cassandra ottiene un **tasso di rilevamento del 100%** sul corpus malevolo, mantenendo un footprint di memoria di picco estremamente ridotto pari a **49,80 MB** e dimostrando una buona scalabilità su CPU parallele, limitata tuttavia dalla fase sequenziale di scrittura del log su disco.
 
 ---
 
