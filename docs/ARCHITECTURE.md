@@ -30,6 +30,8 @@ cassandra/ (Workspace Root)
 │       └── resources/
 │           ├── mod.rs
 │           ├── css.rs
+│           ├── entities.rs
+│           ├── images.rs
 │           ├── javascript.rs
 │           ├── mime.rs
 │           └── pdf.rs
@@ -78,7 +80,8 @@ HTML parsing is built on top of `lol_html`, a fast, streaming CSS-selector-based
 - **CSS Sanitizer (`css.rs`)**: Strips unsafe `url()` imports and expressions pointing to external or unapproved origins.
 - **JS Sanitizer (`javascript.rs`)**: Inspects script contents for dangerous keywords (e.g. `eval`) and active script injection.
 - **PDF Active Content Scanner (`pdf.rs`)**: Scans PDF structure definitions for active elements (like internal `JavaScript`, `/JS`, or `/OpenAction` directives) that could trigger actions inside PDF viewers.
-- **Image Metadata Stripper (`mod.rs`)**: Strips EXIF headers and chunks from JPEG and PNG files to block tracking vectors.
+- **Image Metadata Stripper (`images.rs`)**: Strips EXIF headers and chunks from JPEG and PNG files to block tracking vectors.
+- **XML Entity Scanner (`entities.rs`)**: Scans input byte streams to reject custom XML entity declarations (preventing XXE and XML entity bomb attacks).
 
 ### 2.6 Declarative Policies (`policy.rs`, `rules.rs`, `url.rs`)
 Declarative policies map rule enforcement behavior into:

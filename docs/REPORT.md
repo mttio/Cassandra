@@ -79,8 +79,10 @@ cassandra/ (Workspace Root)
 │       ├── rules.rs          <-- Definizioni delle regole
 │       ├── url.rs            <-- Verifica URL e IDN
 │       └── resources/        <-- Sanitizzatori Specifici per Risorse
-│           ├── mod.rs        <-- Scanner Metadati Immagini e Rimozione EXIF
+│           ├── mod.rs        <-- Inizializzatore Modulo e Gestore Nomi File
 │           ├── css.rs        <-- Sanitizzatore CSS
+│           ├── entities.rs   <-- Scanner Entità XML (Entity Bomb)
+│           ├── images.rs     <-- Rimozione Metadati e EXIF Immagini
 │           ├── javascript.rs <-- Scanner Parole Chiave JS
 │           ├── mime.rs       <-- Rilevatore Magic Number (Sniffer)
 │           └── pdf.rs        <-- Scanner Contenuti Attivi PDF
