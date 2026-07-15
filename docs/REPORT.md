@@ -7,7 +7,7 @@
 
 Cassandra è progettato come un sistema modulare composto da due componenti:
 1. Una libreria riutilizzabile (`sanitizer_engine`) che implementa il motore di scansione, i crawler di rete ricorsivi, il rilevamento dei file tramite magic-number (sniffing), i riscrittori di flusso (stream rewriter), i parser di documenti...
-2. Un'applicazione da riga di comando (`cli_application`) che permette di utilizzare la libreria di sanitizzazione attraverso un'interfaccia grafica da linea di comando.
+2. Un'applicazione da riga di comando (`cli_application`) che permette di utilizzare la libreria di sanitizzazione attraverso un'interfaccia grafica.
 
 La progettazione si affida interamente a **safe Rust**, impiegando una tecnica di **token streaming zero-copy** (utilizzando `lol_html`) al fine di evitare il sovraccarico prestazionale e le vulnerabilità di sicurezza legate alla materializzazione di interi alberi DOM in memoria. Per valutarne l'efficacia, Cassandra è stato testato rispetto a una suite di test contenente sia pagine benigne che risorse pericolose (XSS, XML entity bomb, elementi PDF attivi, confusione omografa IDN, SSRF e MIME confusion). La valutazione sperimentale mostra che Cassandra ottiene un **tasso di rilevamento del 100%** sul corpus malevolo, mantenendo un footprint di memoria di picco estremamente ridotto pari a **49,80 MB** e dimostrando una buona scalabilità su CPU parallele, limitata tuttavia dalla fase sequenziale di scrittura del log su disco.
 
@@ -126,7 +126,50 @@ cassandra/ (Workspace Root)
 *   **La Crawl Session (`crawl_session.rs`)**: Gestisce l'elaborazione dei singoli file e il crawling delle URL. Tiene traccia delle limitazioni delle risorse (`total_requests`, `total_bytes`) per sessione utilizzando contatori locali protetti da mutex e genera asincronamente nuove richieste per le risorse identificate (es. fogli di stile, script) fino alla profondità massima `max_depth`.
 *   **Il Client HTTP Safe (`http_client.rs`)**: Intercetta le richieste in uscita, risolve i nomi DNS e filtra i blocchi IP privati, loopback e CGNAT. Limita la comunicazione alle connessioni HTTPS e analizza i magic numbers dei corpi delle risposte.
 *   **Parser HTML in Flusso (`html.rs`)**: Integra `lol_html`. Legge i file HTML in piccoli chunk, applicando riscrittori basati su selettori CSS per intercettare elementi critici (es. `<script>`, `<iframe>`, `<a>`) e modificarne le proprietà al volo senza allocare memoria superflua.
-*   **Il Logger Consolidato (`log.rs`)**: I worker inviano log di avanzamento ed errori di regola (`RuleError`) tramite un canale `mpsc`. Un thread in background dedicato legge dal canale, stampando il progresso sulla riga di comando. Genera poi il file `cassandra.log` e produce il report strutturato finale `report.json`.
+*   **Il Logger Consolidato (`log.rs`)**: I worker inviano log di avanzamento ed errori di regola (`RuleError`) tramite un canale `mpsc`. Un thread in background dedicato legge dal canale, stampando il progresso sulla riga di comando. Genera poi il file `cassandra.log` e produce il report strutturato finale `report.json`. 
+
+### 2.2 Interfaccia Programmatica (API Pubbliche del Crate)
+
+Il crate di libreria (`cassandra`) espone un'interfaccia pubblica pulita e ben documentata che permette l'integrazione di Cassandra come dipendenza all'interno di altre applicazioni Rust. Le API principali fornite sono:
+
+*   **`InputSource`**: Enum che rappresenta la sorgente da scansionare, supportando file locali o URL remoti:
+    ```rust
+    pub enum InputSource {
+        File(PathBuf),
+        Url(Url),
+    }
+    ```
+*   **`library(...)`**: La funzione di ingresso principale per l'esecuzione della pipeline di sanitizzazione. Accetta un riferimento al runtime di Tokio, una lista di sorgenti, la policy di sicurezza, il percorso di output e il canale MPSC per la trasmissione asincrona dei messaggi di log:
+    ```rust
+    pub fn library(
+        runtime: &Runtime,
+        sources: Vec<InputSource>,
+        policy: Arc<Policy>,
+        output_dir: Arc<PathBuf>,
+        tx: Sender<LoggerMessage>,
+    ) -> Result<(), SanitizerError>;
+    ```
+*   **`logging_thread(...)`**: Funzione pubblica esposta dal modulo `log` per avviare il ciclo di consumo sincrono dei messaggi dal canale MPSC, incaricata di generare i file consolidati `cassandra.log` e `report.json`:
+    ```rust
+    pub fn logging_thread(
+        output: &Path,
+        console_level: LogLevel,
+        file_level: LogLevel,
+        sources: &[InputSource],
+        max_subresources: usize,
+        channel: Receiver<LoggerMessage>,
+    ) -> (bool, f64, f64);
+    ```
+*   **`Policy`**: La struttura di configurazione che definisce le regole di sanitizzazione (espresse in TOML), suddivisa in sotto-policy: `HtmlPolicy`, `UrlsPolicy`, `ResourcesPolicy` e `ConnectionsPolicy`.
+*   **`RuleWithValue<T>` e `ReplaceRule<T>`**: Esposte nel modulo `rules`, permettono di associare livelli di log personalizzati alle limitazioni numeriche (es. `MaxBytes` o `MaxSubresources`) e alle azioni di sostituzione.
+*   **Sanitizzatori Specifici (`resources/`)**: La libreria espone funzioni di utilità riutilizzabili per manipolazioni mirate, tra cui `strip_jpeg_metadata` / `strip_png_metadata` per la rimozione EXIF, ed `EntityScanner` per il rilevamento incrementale di entità XML sospette.
+ 
+
+> **NOTA** Impatto sul consumo di RAM
+> I dati accumulati in memoria per il log e il report sono strutturalmente molto leggeri:
+> - Una riga di log media occupa circa un centinaio di byte.
+> - Anche nel nostro scenario più pesante (carico grande da **7000 file** con circa 15.000 righe di log e report), l'occupazione totale in RAM delle stringhe e dei vettori accumulati è di circa **1.5 - 2.5 MB**.
+> - Poiché il consumo di RAM di picco misurato è di circa **50 MB** (occupati principalmente da runtime Tokio, stack dei thread, buffer di connessione socket e strutture dati globali), liberare 2 MB di RAM non darebbe alcun beneficio tangibile al sistema.
 
 ---
 
