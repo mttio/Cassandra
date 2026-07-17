@@ -8,6 +8,13 @@ pub struct XmlReader {
     previous_is_entity: bool,
 }
 
+enum FeedOutput {
+    Continue,
+    StartTag,
+    EndTag,
+    Cancel,
+}
+
 impl XmlReader {
     pub fn new(length: usize) -> Self {
         Self {
@@ -19,18 +26,18 @@ impl XmlReader {
     }
 
     /// Process a byte, returns true if b"<!ENTITY" (case-insensitive) is matched
-    fn feed(&mut self, b: u8) -> (bool, bool) {
+    fn feed(&mut self, b: u8) -> FeedOutput {
         let target = b"<!ENTITY";
         if self.previous_is_entity
             && let Some(target_char) = target.get(self.buffer.len())
             && b.eq_ignore_ascii_case(target_char)
         {
-            (true, false)
+            FeedOutput::Continue
         } else {
-            if b == b'<' {
-                (true, false)
-            } else if b == b'>' && !self.is_backslash && !self.buffer.is_empty() {
-                (true, true)
+            if b == b'<' && (!self.previous_is_entity || self.buffer.len() < target.len()) {
+                FeedOutput::StartTag
+            } else if b == b'>' && !self.is_backslash && self.buffer.len() >= target.len() {
+                FeedOutput::EndTag
             } else {
                 if b == b'\\' {
                     self.is_backslash = !self.is_backslash;
@@ -38,10 +45,11 @@ impl XmlReader {
                     self.is_backslash = false;
                 }
 
-                (
-                    self.previous_is_entity && self.buffer.len() >= target.len(),
-                    false,
-                )
+                if self.previous_is_entity && self.buffer.len() >= target.len() {
+                    FeedOutput::Continue
+                } else {
+                    FeedOutput::Cancel
+                }
             }
         }
     }
@@ -77,37 +85,38 @@ impl XmlReader {
             //     String::from_utf8_lossy(&self.buffer)
             // );
 
-            let (is_entity, force) = boi;
-
-            if is_entity && self.previous_is_entity && force {
-                self.buffer.push(b);
-                let start = self.length;
-                let end = self.length + self.buffer.len();
-                self.length = end;
-
-                if let Some(replace) = policy.html.xml_entities.check(
-                    &String::from_utf8_lossy(&self.buffer),
-                    start..end,
-                    logger,
-                )? {
-                    data.append(&mut replace.into_bytes());
-                    self.buffer.clear();
-                } else {
+            match boi {
+                FeedOutput::Continue => self.buffer.push(b),
+                FeedOutput::StartTag => {
+                    self.length += self.buffer.len();
                     data.append(&mut self.buffer);
+                    self.buffer.push(b);
+                    self.previous_is_entity = true;
                 }
-            } else if !is_entity && self.previous_is_entity {
-                self.buffer.push(b);
-                self.length += self.buffer.len();
-                data.append(&mut self.buffer);
-            } else if is_entity && !self.previous_is_entity {
-                self.length += self.buffer.len();
-                data.append(&mut self.buffer);
-                self.buffer.push(b);
-            } else {
-                self.buffer.push(b);
-            }
+                FeedOutput::EndTag => {
+                    self.buffer.push(b);
+                    let start = self.length;
+                    let end = self.length + self.buffer.len();
+                    self.length = end;
 
-            self.previous_is_entity = is_entity;
+                    if let Some(replace) = policy.html.xml_entities.check(
+                        &String::from_utf8_lossy(&self.buffer),
+                        start..end,
+                        logger,
+                    )? {
+                        data.append(&mut replace.into_bytes());
+                        self.buffer.clear();
+                    } else {
+                        data.append(&mut self.buffer);
+                    }
+                }
+                FeedOutput::Cancel => {
+                    self.buffer.push(b);
+                    self.length += self.buffer.len();
+                    data.append(&mut self.buffer);
+                    self.previous_is_entity = false;
+                }
+            }
         }
 
         policy.resources.max_bytes.check(self.length, logger)?;
