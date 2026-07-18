@@ -54,20 +54,6 @@ impl XmlReader {
         }
     }
 
-    // fn feed_chunk(&mut self, chunk: &[u8]) -> Option<(usize, Option<usize>)> {
-    //     for (i, &b) in chunk.iter().enumerate() {
-    //         if let Some(index) = self.feed(b) {
-    //             return Some((i.saturating_sub(index), Some(i + 1)));
-    //         }
-    //     }
-
-    //     if self.match_idx > 0 {
-    //         return Some((chunk.len().saturating_sub(self.match_idx), None));
-    //     }
-
-    //     None
-    // }
-
     pub fn next_chunk(
         &mut self,
         chunk: &[u8],
@@ -77,15 +63,7 @@ impl XmlReader {
         let mut data = Vec::new();
 
         for &b in chunk {
-            let boi = self.feed(b);
-            // println!(
-            //     "{boi:?} - {{\n  length = {}\n  is_entity = {}\n  buffer = {:?}\n}}",
-            //     self.length,
-            //     self.previous_is_entity,
-            //     String::from_utf8_lossy(&self.buffer)
-            // );
-
-            match boi {
+            match self.feed(b) {
                 FeedOutput::Continue => self.buffer.push(b),
                 FeedOutput::StartTag => {
                     self.length += self.buffer.len();
@@ -123,90 +101,81 @@ impl XmlReader {
 
         Ok(data)
     }
-
-    // pub fn next_chunk_2(
-    //     &mut self,
-    //     mut chunk: &[u8],
-    //     policy: &Policy,
-    //     logger: &impl Log,
-    // ) -> Result<Vec<u8>, RuleError> {
-    //     let mut data = Vec::new();
-
-    //     loop {
-    //         let Some((start, end)) = self.feed_chunk(chunk) else {
-    //             data.append(&mut self.buffer);
-    //             data.extend_from_slice(chunk);
-    //             break;
-    //         };
-
-    //         let Some(end) = end else {
-    //             self.buffer.extend_from_slice(&chunk[start..]);
-    //             data.extend_from_slice(&chunk[..start]);
-    //             break;
-    //         };
-
-    //         self.buffer.extend_from_slice(&chunk[start..end]);
-    //         data.extend_from_slice(&chunk[..start]);
-
-    //         chunk = &chunk[end..];
-
-    //         let start = start + self.length;
-    //         let end = end + self.length;
-    //         self.length = end;
-
-    //         if let Some(replace) = policy.html.xml_entities.check(
-    //             &String::from_utf8_lossy(&self.buffer),
-    //             start..end,
-    //             logger,
-    //         )? {
-    //             data.append(&mut replace.into_bytes());
-    //             self.buffer.clear();
-    //         } else {
-    //             data.append(&mut self.buffer);
-    //         }
-    //     }
-
-    //     self.length += chunk.len();
-    //     policy.resources.max_bytes.check(self.length, logger)?;
-
-    //     Ok(data)
-    // }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::log::NullLogger;
+    use std::{assert_matches, ops::Range};
+
     use super::*;
 
     #[test]
     fn xml_reader() {
+        let policy = Policy::default();
+        let logger = NullLogger;
+
         let mut scanner = XmlReader::new(0);
-        assert_eq!(scanner.feed_chunk(b"<html><body>"), None);
-        assert_eq!(scanner.feed_chunk(b"<!DOCTYPE html>"), None);
-        assert_eq!(scanner.feed_chunk(b"<!ENTITY x 'y'>"), Some((0, Some(15))));
+        assert_eq!(
+            scanner.next_chunk(b"<html><body>", &policy, &logger),
+            Ok(b"<html><body>".to_vec())
+        );
+        assert_eq!(
+            scanner.next_chunk(b"<!DOCTYPE html>", &policy, &logger),
+            Ok(b"<!DOCTYPE html>".to_vec())
+        );
+        assert_matches!(
+            scanner.next_chunk(b"<!ENTITY x 'y'>", &policy, &logger),
+            Err(RuleError::Replace {
+                offset: Range { start: 27, end: 42 },
+                ..
+            })
+        );
 
         // Case insensitivity
         let mut reader = XmlReader::new(0);
-        assert_eq!(
-            reader.feed_chunk(b"<!entity lol 'lol'>"),
-            Some((0, Some(19)))
+        assert_matches!(
+            reader.next_chunk(b"<!entity lol 'lol'>", &policy, &logger),
+            Err(RuleError::Replace {
+                offset: Range { start: 0, end: 19 },
+                ..
+            })
         );
 
-        // Boundary split
+        // // Boundary split
         let mut reader = XmlReader::new(0);
-        assert_eq!(reader.feed_chunk(b"abc<!ENT"), Some((3, None)));
-        assert_eq!(reader.feed_chunk(b"ITY def"), Some((0, None)));
-        assert_eq!(reader.feed_chunk(b">"), Some((0, Some(1))));
+        assert_matches!(reader.next_chunk(b"abc<!ENT", &policy, &logger), Ok(_));
+        assert_matches!(reader.next_chunk(b"ITY def", &policy, &logger), Ok(_));
+        assert_matches!(
+            reader.next_chunk(b">", &policy, &logger),
+            Err(RuleError::Replace {
+                offset: Range { start: 3, end: 16 },
+                ..
+            })
+        );
 
         // Overlapping match
         let mut reader = XmlReader::new(0);
-        assert_eq!(reader.feed_chunk(b"<!<!ENT"), Some((2, None)));
-        assert_eq!(reader.feed_chunk(b"ITY"), Some((0, None)));
-        assert_eq!(reader.feed_chunk(b">"), Some((0, Some(1))));
+        assert_matches!(reader.next_chunk(b"<!<!ENT", &policy, &logger), Ok(_));
+        assert_matches!(reader.next_chunk(b"ITY", &policy, &logger), Ok(_));
+        assert_matches!(
+            reader.next_chunk(b">", &policy, &logger),
+            Err(RuleError::Replace {
+                offset: Range { start: 2, end: 11 },
+                ..
+            })
+        );
 
         // Another overlap match
         let mut reader = XmlReader::new(0);
-        assert_eq!(reader.feed_chunk(b"<!EN<!ENT"), Some((4, None)));
-        assert_eq!(reader.feed_chunk(b"ITY"), Some((0, None)));
-        assert_eq!(reader.feed_chunk(b">"), Some((0, Some(1))));
+        assert_matches!(reader.next_chunk(b"<!EN<!ENT", &policy, &logger), Ok(_));
+        assert_matches!(reader.next_chunk(b"ITY", &policy, &logger), Ok(_));
+        assert_matches!(
+            reader.next_chunk(b">", &policy, &logger),
+            Err(RuleError::Replace {
+                offset: Range { start: 4, end: 13 },
+                ..
+            })
+        );
     }
 }
