@@ -30,12 +30,11 @@ pub fn sanitize(
                         break;
                     }
                 }
-                if temp.peek() == Some(&'(') {
-                    if let Some(replace) =
+                if temp.peek() == Some(&'(')
+                    && let Some(replace) =
                         rule.handle("eval(...)".to_owned(), 0..content.len(), logger)?
-                    {
-                        return Ok(replace);
-                    }
+                {
+                    return Ok(replace);
                 }
             }
         }
@@ -45,12 +44,11 @@ pub fn sanitize(
                 let mut temp = temp.skip_while(|c| c.is_whitespace());
                 if temp.next() == Some('.') {
                     let mut temp = temp.skip_while(|c| c.is_whitespace());
-                    if temp.next_array() == Some(['w', 'r', 'i', 't', 'e']) {
-                        if let Some(replace) =
+                    if temp.next_array() == Some(['w', 'r', 'i', 't', 'e'])
+                        && let Some(replace) =
                             rule.handle("document.write(...)".to_owned(), 0..content.len(), logger)?
-                        {
-                            return Ok(replace);
-                        }
+                    {
+                        return Ok(replace);
                     }
                 }
             }
