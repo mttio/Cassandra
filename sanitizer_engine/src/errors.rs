@@ -29,30 +29,20 @@ impl<T: ToString> Pretty for T {
 #[error(transparent)]
 #[serde(tag = "type")]
 pub enum RuleError {
-    #[error("too many redirects (max = {})", max.pretty())]
+    #[error("Too many redirects (max = {})", max.pretty())]
     #[serde(rename = "too_many_redirects")]
     TooManyRedirects { max: usize },
     #[error(
-        "connecting to IDN host: `{}` {} `{}`",
+        "Connecting to IDN host: `{}` {} `{}`",
         original.pretty(),
         "->".yellow(),
         converted.pretty(),
     )]
     #[serde(rename = "idn_connection")]
     IdnConnection { original: String, converted: String },
-    #[error("connecting to dangerous domain ({})", original.pretty())]
+    #[error("Connecting to dangerous domain ({})", original.pretty())]
     #[serde(rename = "dangerous_domain_connection")]
     DangerousDomainConnection { original: Host },
-    #[error(
-        "blocked meta refresh (content = {}) {}",
-        original.pretty(),
-        format_range(offset),
-    )]
-    #[serde(rename = "meta_refresh")]
-    BlockedMetaRefresh {
-        original: String,
-        offset: Range<usize>,
-    },
     #[error(
         "MIME mismatch (expected = {}, actual = {})",
         expected.as_deref().unwrap_or("<none>").pretty(),
@@ -63,18 +53,21 @@ pub enum RuleError {
         expected: Option<String>,
         actual: Option<String>,
     },
-    #[error("response body exceeds maximum size ({} bytes)", max.pretty())]
+    #[error("Response body exceeds maximum size ({} bytes)", max.pretty())]
     #[serde(rename = "content_too_long")]
     ContentTooLong { max: usize },
-    #[error("Sub-resource crawl limit reached: max_requests = {}", max.pretty())]
+    #[error("Sub-resource amount limit reached: max_requests = {}", max.pretty())]
     #[serde(rename = "too_many_subresources")]
     MaxSubresources { max: usize },
-    #[error("Sub-resource crawl depth limit reached: max_requests = {}", max.pretty())]
+    #[error("Sub-resource depth limit reached: max_requests = {}", max.pretty())]
     #[serde(rename = "subresources_too_deep")]
     MaxSubresourceDepth { max: usize },
-    #[error("embedded active content `{}`", original.pretty())]
+    #[error("Pdf active content: `{}` {}", original.pretty(), format_range(location))]
     #[serde(rename = "active_content")]
-    ActiveContent { original: String },
+    PdfActiveContent {
+        original: String,
+        location: Range<usize>,
+    },
     #[error("Unknown resource type: `{}`", match mime {
         Some(x) => x.pretty(),
         None => "<none>".pretty(),
@@ -87,14 +80,14 @@ pub enum RuleError {
             Some(x) => format!(" {} `{}`", "->".yellow(), x.pretty()),
             None => "".to_owned(),
         },
-        format_range(offset),
+        format_range(location),
     )]
     #[serde(untagged)]
     Replace {
         #[serde(flatten)]
         inner: RuleReplaceError,
         replacement: Option<String>,
-        offset: Range<usize>,
+        location: Range<usize>,
     },
 }
 
@@ -102,10 +95,13 @@ pub enum RuleError {
 #[error(transparent)]
 #[serde(tag = "type")]
 pub enum RuleReplaceError {
-    #[error("event handler: `{}`", original.pretty())]
+    #[error("Event handler: `{}`", original.pretty())]
     #[serde(rename = "event_handlers")]
     EventHandler { original: String },
-    #[error("dangerous script: `{}`",
+    #[error("Meta refresh: `{}`", original.pretty())]
+    #[serde(rename = "meta_refresh")]
+    MetaRefresh { original: String },
+    #[error("Dangerous script: `{}`",
         match original {
             Some(x) => x.pretty(),
             None => "<inline>".pretty()
@@ -113,34 +109,24 @@ pub enum RuleReplaceError {
     )]
     #[serde(rename = "dangerous_scripts")]
     DangerousScript { original: Option<String> },
-    #[error(
-        "dangerous origin (tag = {}): `{}`",
-        tag.pretty(),
-        original.pretty(),
-    )]
+    #[error("Dangerous origin: `{}`", original.pretty())]
     #[serde(rename = "dangerous_origins")]
-    DangerousOrigin { tag: String, original: String },
-    #[error("dangerous domain: `{}`", original.pretty())]
+    DangerousOrigin { original: String },
+    #[error("Dangerous domain: `{}`", original.pretty())]
     #[serde(rename = "dangerous_domain")]
     DangerousDomain { original: Host },
-    #[error("dangerous URI: `{}`", original.pretty())]
+    #[error("Dangerous URI: `{}`", original.pretty())]
     #[serde(rename = "dangerous_uris")]
     DangerousUri { original: String },
-    #[error("custom XML entity declaration (potential XML bomb): `{}`", original.pretty())]
+    #[error("Custom XML entity declaration (potential XML bomb): `{}`", original.pretty())]
     #[serde(rename = "xml_entity_declaration")]
     XmlEntityDeclaration { original: String },
     #[error("IDN host: `{}`", original.pretty())]
     #[serde(rename = "idn")]
     Idn { original: String },
-    #[error("Dangerous construct detected in JS: `{}`", original.pretty())]
+    #[error("Dangerous JS construct: `{}`", original.pretty())]
     #[serde(rename = "dangerous_js")]
     DangerousJsConstruct { original: String },
-    #[error(
-        "Dangerous construct detected in CSS: `{}`",
-        original.pretty(),
-    )]
-    #[serde(rename = "dangerous_css")]
-    DangerousCssConstruct { original: String },
 }
 
 /// An error that the sanitizer can produce

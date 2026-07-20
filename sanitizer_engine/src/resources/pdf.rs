@@ -35,8 +35,9 @@ pub fn sanitize(data: &[u8], logger: &impl Log, rule: LogLevel) -> Result<(), Sa
                 if is_pdf_delimiter(next_char) {
                     rule.handle(
                         logger,
-                        RuleError::ActiveContent {
+                        RuleError::PdfActiveContent {
                             original: "JavaScript (/JS)".to_owned(),
+                            location: i..i + 3,
                         },
                     )?;
                 }
@@ -46,8 +47,9 @@ pub fn sanitize(data: &[u8], logger: &impl Log, rule: LogLevel) -> Result<(), Sa
                 if is_pdf_delimiter(next_char) {
                     rule.handle(
                         logger,
-                        RuleError::ActiveContent {
+                        RuleError::PdfActiveContent {
                             original: "JavaScript".to_owned(),
+                            location: i..i + 11,
                         },
                     )?;
                 }
@@ -57,8 +59,9 @@ pub fn sanitize(data: &[u8], logger: &impl Log, rule: LogLevel) -> Result<(), Sa
                 if is_pdf_delimiter(next_char) {
                     rule.handle(
                         logger,
-                        RuleError::ActiveContent {
+                        RuleError::PdfActiveContent {
                             original: "Additional Action (/AA)".to_owned(),
+                            location: i..i + 3,
                         },
                     )?;
                 }
@@ -68,8 +71,9 @@ pub fn sanitize(data: &[u8], logger: &impl Log, rule: LogLevel) -> Result<(), Sa
                 if is_pdf_delimiter(next_char) {
                     rule.handle(
                         logger,
-                        RuleError::ActiveContent {
+                        RuleError::PdfActiveContent {
                             original: "OpenAction".to_owned(),
+                            location: i..i + 11,
                         },
                     )?;
                 }
@@ -100,7 +104,7 @@ fn is_pdf_delimiter(b: u8) -> bool {
 mod tests {
     use url::Url;
 
-    use crate::{log::NullLogger, rules::ReplaceRule};
+    use crate::{log::NullLogger, policy::Policy, rules::ReplaceRule};
 
     use super::*;
 
@@ -138,6 +142,9 @@ mod tests {
             std::fs::read("../input_test_files/malicious/pdf_js_bomb.pdf").unwrap();
         assert!(sanitize(&malicious_file_data, &logger, rule).is_err());
 
+        let mut policy = Policy::default();
+        policy.html.dangerous_domain = ReplaceRule::with_default(LogLevel::Warn);
+
         // CSS and JS disk file validation checks
         let css_file_data =
             std::fs::read_to_string("../input_test_files/malicious/dangerous_styles.css").unwrap();
@@ -145,10 +152,10 @@ mod tests {
             &css_file_data,
             &Url::parse("https://localhost").unwrap(),
             &NullLogger,
-            &ReplaceRule::with_default(LogLevel::Warn),
+            &policy,
         )
         .unwrap();
-        assert!(clean_css.contains("url(\"\")"));
+        assert!(clean_css.contains("url(\"#\")"));
 
         let js_file_data =
             std::fs::read_to_string("../input_test_files/malicious/dangerous_script.js").unwrap();

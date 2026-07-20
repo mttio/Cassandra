@@ -11,7 +11,8 @@ use url::Url;
 use crate::{
     errors::RuleError,
     log::Log,
-    policy::Policy,
+    policy::{AllowedScript, Policy},
+    rules::sanitize_attribute,
     url::{detect_idn, host_matches, is_dangerous_uri},
 };
 
@@ -127,7 +128,7 @@ fn replace_attribute(
         element.remove_attribute(name)
     } else {
         // SAFETY: we removed all invalid characters
-        let _ = element.set_attribute(name, value);
+        let _ = element.set_attribute(name, &sanitize_attribute(value));
     }
 }
 
@@ -309,17 +310,18 @@ pub fn create_rewriter<'a, W: Write>(
 
                 if let Some(resolved) = handle_attribute(el, "src", &state.base, policy, logger)? {
                     if let Some(host) = resolved.host() {
-                        let host = host.to_string();
-                        if !policy
-                            .html
-                            .allow_scripts
-                            .iter()
-                            .any(|allowed| host.starts_with(allowed))
-                            && let Some(replace) = policy
-                                .html
-                                .dangerous_scripts
-                                .handle(host, location, logger)?
-                        {
+                        let host = host.to_owned();
+                        if !policy.html.allow_scripts.iter().any(|allowed| {
+                            if let AllowedScript::Host(allowed) = allowed {
+                                host_matches(allowed, &host)
+                            } else {
+                                false
+                            }
+                        }) && let Some(replace) = policy.html.dangerous_scripts.handle(
+                            host.to_string(),
+                            location,
+                            logger,
+                        )? {
                             replace_attribute(&replace, "src", el);
                         }
                     };
@@ -354,11 +356,10 @@ pub fn create_rewriter<'a, W: Write>(
                         false
                     };
                     if !matched
-                        && let Some(replace) = policy.html.dangerous_origins.handle(
-                            (resolved, tag),
-                            location,
-                            logger,
-                        )?
+                        && let Some(replace) = policy
+                            .html
+                            .dangerous_origins
+                            .handle(resolved, location, logger)?
                     {
                         replace_attribute(&replace, "src", el);
                     }
@@ -377,11 +378,10 @@ pub fn create_rewriter<'a, W: Write>(
                         false
                     };
                     if !matched
-                        && let Some(replace) = policy.html.dangerous_origins.handle(
-                            (resolved, tag),
-                            location,
-                            logger,
-                        )?
+                        && let Some(replace) = policy
+                            .html
+                            .dangerous_origins
+                            .handle(resolved, location, logger)?
                     {
                         replace_attribute(&replace, "data", el);
                     }
@@ -393,11 +393,16 @@ pub fn create_rewriter<'a, W: Write>(
                 {
                     let content = el.get_attribute("content").unwrap_or_default();
                     let location = el.source_location().bytes();
-                    logger.error(RuleError::BlockedMetaRefresh {
-                        original: content,
-                        offset: location,
-                    });
-                    el.remove();
+
+                    if let Some(replace) =
+                        policy.html.meta_refresh.handle(content, location, logger)?
+                    {
+                        if replace.is_empty() {
+                            el.remove();
+                        } else {
+                            replace_attribute(&replace, "content", el);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -427,16 +432,17 @@ pub fn create_rewriter<'a, W: Write>(
             let start = *location;
             let end = t.source_location().bytes().end;
 
-            if !policy
-                .html
-                .allow_scripts
-                .iter()
-                .any(|allowed| csp_hash.starts_with(allowed))
-                && let Some(replace) =
-                    policy
-                        .html
-                        .dangerous_scripts
-                        .handle(csp_hash, start..end, logger)?
+            if !policy.html.allow_scripts.iter().any(|allowed| {
+                if let AllowedScript::Sha(allowed) = allowed {
+                    csp_hash == *allowed
+                } else {
+                    false
+                }
+            }) && let Some(replace) =
+                policy
+                    .html
+                    .dangerous_scripts
+                    .handle(csp_hash, start..end, logger)?
             {
                 t.replace(&replace, ContentType::Text);
             } else {
@@ -463,7 +469,7 @@ pub fn create_rewriter<'a, W: Write>(
                 text,
                 &state.base,
                 &logger.inner_content(*location),
-                &policy.resources.dangerous_css,
+                policy,
             )?;
             t.replace(&css, ContentType::Text);
             state.subresources.append(&mut subresources);
@@ -545,7 +551,7 @@ mod tests {
     #[test]
     fn test_script_src_allowed() {
         let mut policy = Policy::default();
-        policy.html.allow_scripts = vec!["trusted.com".to_owned()];
+        policy.html.allow_scripts = vec!["trusted.com".parse().unwrap()];
 
         let input = b"<script src=\"https://trusted.com/lib.js\"></script>";
         let (_, output) = rewrite_html(input, &policy);
@@ -558,7 +564,7 @@ mod tests {
     fn test_script_src_blocked() {
         let mut policy = Policy::default();
         policy.resources.fetch_sub_resources = false;
-        policy.html.allow_scripts = vec!["trusted.com".to_owned()];
+        policy.html.allow_scripts = vec!["trusted.com".parse().unwrap()];
         policy.html.dangerous_scripts = ReplaceRule::with_default(LogLevel::Warn);
 
         let input = b"<script src=\"https://untrusted.com/lib.js\"></script>";
@@ -571,8 +577,11 @@ mod tests {
     #[test]
     fn test_script_inline_allowed() {
         let mut policy = Policy::default();
-        policy.html.allow_scripts =
-            vec!["sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI=".to_owned()];
+        policy.html.allow_scripts = vec![
+            "sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI="
+                .parse()
+                .unwrap(),
+        ];
 
         let input = b"<script>alert(1)</script>";
         let (_, output) = rewrite_html(input, &policy);

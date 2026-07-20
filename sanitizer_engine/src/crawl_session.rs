@@ -126,12 +126,8 @@ impl CrawlSession {
             }
             Some(KnownResourceType::Css) => {
                 let css_str = String::from_utf8_lossy(&fetched.data);
-                let (sanitized_css, nested_urls) = crate::resources::css::sanitize(
-                    &css_str,
-                    &url,
-                    logger,
-                    &self.policy.resources.dangerous_css,
-                )?;
+                let (sanitized_css, nested_urls) =
+                    crate::resources::css::sanitize(&css_str, &url, logger, &self.policy)?;
                 for (n_url, n_local) in nested_urls {
                     self.try_enqueue_subresource(n_url, n_local, depth + 1);
                 }
@@ -236,23 +232,22 @@ impl CrawlSession {
     }
 
     fn process_css_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
-        let output_path = self.output_dir.join(format!("{}.css", self.index()));
+        let output = self.output_dir.join(format!("{}.css", self.index()));
         let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
-        let css_str = String::from_utf8_lossy(&data);
-        let dummy_url = Url::parse("https://localhost").unwrap();
-        let (sanitized_css, _) = crate::resources::css::sanitize(
-            &css_str,
-            &dummy_url,
+        let (content, _) = crate::resources::css::sanitize(
+            &String::from_utf8_lossy(&data),
+            &Url::parse("https://localhost").unwrap(),
             &self.logger,
-            &self.policy.resources.dangerous_css,
+            &self.policy,
         )?;
-        fs::write(&output_path, sanitized_css.as_bytes())
-            .map_err(|e| SanitizerError::WriteFile(output_path, e))?;
+
+        fs::write(&output, content.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))?;
+
         Ok(())
     }
 
     fn process_js_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
-        let output_path = self.output_dir.join(format!("{}.js", self.index()));
+        let output = self.output_dir.join(format!("{}.js", self.index()));
         let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
         let content = crate::resources::javascript::sanitize(
             &String::from_utf8_lossy(&data),
@@ -260,9 +255,7 @@ impl CrawlSession {
             &self.policy.resources.dangerous_js,
         )?;
 
-        let to_write = content.as_bytes().to_vec();
-
-        fs::write(&output_path, to_write).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
+        fs::write(&output, content.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))?;
 
         Ok(())
     }

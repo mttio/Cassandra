@@ -3,8 +3,8 @@ use url::Url;
 use crate::{
     errors::RuleError,
     log::Log,
-    rules::{CssUrl, ReplaceRule},
-    url::is_dangerous_uri,
+    policy::Policy,
+    url::{detect_idn, is_dangerous_uri},
 };
 
 /// Scans CSS content for @import and url(...) references, validates/rewrites them, and extracts them.
@@ -21,11 +21,11 @@ pub fn sanitize(
     css: &str,
     base_url: &Url,
     logger: &impl Log,
-    rule: &ReplaceRule<CssUrl>,
+    policy: &Policy,
 ) -> Result<(String, Vec<(Url, String)>), RuleError> {
     let mut output = String::new();
     let mut extracted = Vec::new();
-    let chars: Vec<char> = css.chars().collect();
+    let chars: Vec<_> = css.chars().collect();
     let mut i = 0;
 
     fn skip_whitespace(chars: &[char], i: &mut usize) {
@@ -123,30 +123,43 @@ pub fn sanitize(
             let offset = i;
 
             let url = read_url_string(&chars, &mut i, ')');
-
             let clean = url.trim();
-            if is_dangerous_uri(clean) {
+            let location = offset..offset + url.len();
+
+            let processed = if is_dangerous_uri(clean) {
                 if let Some(replace) =
-                    rule.handle(url.clone(), offset..offset + url.len(), logger)?
+                    policy
+                        .html
+                        .dangerous_uris
+                        .handle(url.clone(), location, logger)?
                 {
-                    output.push_str(&format!("url(\"{replace}\")"));
+                    replace
                 } else {
-                    output.push_str(&format!("url(\"{url}\")"));
+                    url
                 }
             } else if let Ok(resolved_url) = base_url.join(clean) {
-                let ext = clean
-                    .rsplit('.')
-                    .next()
-                    .unwrap_or("bin")
-                    .split('?')
-                    .next()
-                    .unwrap_or("bin");
-                let local_name = super::generate_local_filename(&resolved_url, ext);
-                output.push_str(&format!("url(\"{}\")", local_name));
-                extracted.push((resolved_url, local_name));
+                if detect_idn(&resolved_url).is_some()
+                    && let Some(replace) =
+                        policy.urls.idn.handle(url.to_owned(), location, logger)?
+                {
+                    replace
+                } else {
+                    let ext = clean
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("bin")
+                        .split('?')
+                        .next()
+                        .unwrap_or("bin");
+                    let local_name = super::generate_local_filename(&resolved_url, ext);
+                    extracted.push((resolved_url, local_name.clone()));
+                    local_name
+                }
             } else {
-                output.push_str("url(\"\")");
-            }
+                "".to_owned()
+            };
+
+            output.push_str(&format!("url(\"{processed}\")"));
             continue;
         }
 
@@ -160,19 +173,19 @@ pub fn sanitize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log::{LogLevel, NullLogger};
+    use crate::{
+        log::{LogLevel, NullLogger},
+        rules::ReplaceRule,
+    };
 
     #[test]
     fn test_sanitize() {
+        let mut policy = Policy::default();
+        policy.html.dangerous_domain = ReplaceRule::with_default(LogLevel::Warn);
+
         let base_url = Url::parse("https://example.com/dir/style.css").unwrap();
         let css = "body { background: url('img.png'); } @import 'common.css';";
-        let (rewritten, extracted) = sanitize(
-            css,
-            &base_url,
-            &NullLogger,
-            &ReplaceRule::with_default(LogLevel::Warn),
-        )
-        .unwrap();
+        let (rewritten, extracted) = sanitize(css, &base_url, &NullLogger, &policy).unwrap();
 
         assert!(rewritten.contains("url(\"sub_"));
         assert!(rewritten.contains("@import \"sub_"));
@@ -189,16 +202,13 @@ mod tests {
 
     #[test]
     fn test_sanitize_dangerous_uris() {
+        let mut policy = Policy::default();
+        policy.html.dangerous_domain = ReplaceRule::with_default(LogLevel::Warn);
+
         let base_url = Url::parse("https://example.com/style.css").unwrap();
         let css = "body { background: url('data:image/png;base64,1234'); font: url('javascript:alert(1)'); }";
-        let (rewritten, extracted) = sanitize(
-            css,
-            &base_url,
-            &NullLogger,
-            &ReplaceRule::with_default(LogLevel::Warn),
-        )
-        .unwrap();
-        assert!(rewritten.contains("url(\"\")"));
+        let (rewritten, extracted) = sanitize(css, &base_url, &NullLogger, &policy).unwrap();
+        assert!(rewritten.contains("url(\"#\")"));
         assert_eq!(extracted.len(), 0);
     }
 }

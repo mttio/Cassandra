@@ -90,7 +90,7 @@ impl<L: Log> Log for LoggerWithOffset<L> {
         if let SanitizerMessage::Error(SanitizerError::Rule(RuleError::Replace {
             inner,
             replacement,
-            offset,
+            location,
         })) = message
         {
             self.inner.log(
@@ -98,7 +98,7 @@ impl<L: Log> Log for LoggerWithOffset<L> {
                 RuleError::Replace {
                     inner,
                     replacement,
-                    offset: offset.start + self.offset..offset.end + self.offset,
+                    location: location.start + self.offset..location.end + self.offset,
                 },
             );
         } else {
@@ -233,7 +233,7 @@ pub fn logging_thread(
         .collect_vec();
 
     let width1 = (sources.len() as f64).log10().ceil() as usize;
-    let width2 = (max_subresources as f64).log10().ceil() as usize;
+    let width2 = ((max_subresources + 1) as f64).log10().ceil() as usize;
     let mut has_errors = false;
 
     let start_loop = std::time::Instant::now();
@@ -262,13 +262,13 @@ pub fn logging_thread(
 
         if msg.level >= console_level {
             println!(
-                "[{}{}] {}: {}",
+                "[{}/{}] {}: {}",
                 format!("{:>width1$}", msg.source).bold().bright_blue(),
-                if msg.subresource == 0 {
-                    " ".repeat(width2 + 1)
-                } else {
-                    format!("/{:0>width2$}", msg.subresource.to_string().bold().blue())
-                },
+                match msg.subresource {
+                    0 => "-".repeat(width2).bright_black(),
+                    x => format!("{:0>width2$}", x).blue(),
+                }
+                .bold(),
                 match msg.level {
                     LogLevel::Trace => "TRACE".bright_black(),
                     LogLevel::Debug => "DEBUG".bright_blue(),
@@ -284,13 +284,12 @@ pub fn logging_thread(
         if msg.level >= file_level {
             let now = Local::now().naive_local();
             let line = format!(
-                "({}) [{:>width1$}{}] {}: {}",
+                "({}) [{:>width1$}/{}] {}: {}",
                 now.format("%Y-%m-%d %H:%M:%S%.3f"),
                 msg.source,
-                if msg.subresource == 0 {
-                    " ".repeat(width2 + 1)
-                } else {
-                    format!("/{:0>width2$}", msg.subresource)
+                match msg.subresource {
+                    0 => "-".repeat(width2),
+                    x => format!("{:0>width2$}", x),
                 },
                 match msg.level {
                     LogLevel::Trace => "TRACE",
@@ -427,7 +426,7 @@ mod tests {
                 original: Some("evil_script()".to_owned()),
             },
             replacement: None,
-            offset: 10..20,
+            location: 10..20,
         };
         // let event = err.to_event();
         // assert_eq!(event.rule, "allow_scripts");

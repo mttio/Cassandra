@@ -15,7 +15,7 @@ pub fn detect_idn(url: &Url) -> Option<(&str, &str)> {
 }
 
 /// Checks if a given host matches a host specified in the policy
-/// Ignores prefix labels (e.g. `wikipedia.com` matches `www.wikipedia.com`)
+/// Ignores prefix labels (e.g. `wikipedia.org` matches `www.wikipedia.org`)
 pub fn host_matches(host: &Host, target: &Host) -> bool {
     match (host, target) {
         (Host::Domain(host, _), Host::Domain(target, _)) => {

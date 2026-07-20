@@ -127,7 +127,7 @@ mod tests {
         assert_matches!(
             scanner.next_chunk(b"<!ENTITY x 'y'>", &policy, &logger),
             Err(RuleError::Replace {
-                offset: Range { start: 27, end: 42 },
+                location: Range { start: 27, end: 42 },
                 ..
             })
         );
@@ -137,7 +137,7 @@ mod tests {
         assert_matches!(
             reader.next_chunk(b"<!entity lol 'lol'>", &policy, &logger),
             Err(RuleError::Replace {
-                offset: Range { start: 0, end: 19 },
+                location: Range { start: 0, end: 19 },
                 ..
             })
         );
@@ -149,7 +149,7 @@ mod tests {
         assert_matches!(
             reader.next_chunk(b">", &policy, &logger),
             Err(RuleError::Replace {
-                offset: Range { start: 3, end: 16 },
+                location: Range { start: 3, end: 16 },
                 ..
             })
         );
@@ -161,7 +161,7 @@ mod tests {
         assert_matches!(
             reader.next_chunk(b">", &policy, &logger),
             Err(RuleError::Replace {
-                offset: Range { start: 2, end: 11 },
+                location: Range { start: 2, end: 11 },
                 ..
             })
         );
@@ -173,7 +173,7 @@ mod tests {
         assert_matches!(
             reader.next_chunk(b">", &policy, &logger),
             Err(RuleError::Replace {
-                offset: Range { start: 4, end: 13 },
+                location: Range { start: 4, end: 13 },
                 ..
             })
         );
