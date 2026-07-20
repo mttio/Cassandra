@@ -48,6 +48,7 @@ pub struct HtmlPolicy {
     pub allow_origins: Vec<PolicyHost>,
     /// Action to perform when an event handler is encountered
     pub event_handlers: ReplaceRule<rules::EventHandlers>,
+    pub xml_entities: ReplaceRule<rules::XmlEntities>,
     pub dangerous_scripts: ReplaceRule<rules::DangerousScripts>,
     pub dangerous_origins: ReplaceRule<rules::DangerousOrigins>,
     /// Rule for dangerous domains
@@ -66,6 +67,7 @@ impl Default for HtmlPolicy {
                 .map(PolicyHost)
                 .collect(),
             event_handlers: ReplaceRule::with_default(LogLevel::Info),
+            xml_entities: ReplaceRule::with_default(LogLevel::Error),
             dangerous_scripts: ReplaceRule::with_default(LogLevel::Error),
             dangerous_origins: ReplaceRule::with_default(LogLevel::Error),
             dangerous_domain: ReplaceRule::with_default(LogLevel::Error),
@@ -80,8 +82,10 @@ pub struct UrlsPolicy {
     /// List of domains considered dangerous
     /// Ignores prefix labels (e.g. `youtube.com` matches `www.youtube.com`)
     pub dangerous_domains: Vec<PolicyHost>,
-    /// Action to perform when a non-latin url is encountered
+    /// Action to perform when a IDN url is found in a file
     pub idn: ReplaceRule<rules::Idn>,
+    /// Action to perform when connecting to a IDN url
+    pub idn_connection: LogLevel,
 }
 
 impl Default for UrlsPolicy {
@@ -93,6 +97,7 @@ impl Default for UrlsPolicy {
                 .map(PolicyHost)
                 .collect(),
             idn: ReplaceRule::with_default(LogLevel::Warn),
+            idn_connection: LogLevel::Warn,
         }
     }
 }

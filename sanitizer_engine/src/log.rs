@@ -314,7 +314,7 @@ pub fn logging_thread(
 mod tests {
     use super::*;
     use crate::crawl_session::CrawlSession;
-    use crate::errors::RuleReplaceError;
+    use crate::errors::{RuleReplaceError, SanitizerError};
     use crate::http_client::SanitizerHttpClient;
     use crate::policy::Policy;
     use parking_lot::Mutex;
@@ -363,8 +363,13 @@ mod tests {
 
         // Retrieve the logged error
         let msg = rx.try_recv().expect("Expected a log message");
-        let err_str = msg.message.to_string();
-        assert!(err_str.contains("custom XML entity declaration detected"));
+        std::assert_matches!(
+            msg.message,
+            SanitizerMessage::Error(SanitizerError::Rule(RuleError::Replace {
+                inner: RuleReplaceError::XmlEntityDeclaration { .. },
+                ..
+            }))
+        );
     }
 
     #[test]
