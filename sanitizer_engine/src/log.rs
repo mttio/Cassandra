@@ -159,7 +159,7 @@ pub fn logging_thread(
     sources: &[InputSource],
     max_subresources: usize,
     channel: Receiver<LoggerMessage>,
-) -> bool {
+) -> (bool, f64, f64) {
     use crate::errors::{SanitizationReport, SanitizerError};
 
     struct Subresource {
@@ -168,15 +168,15 @@ pub fn logging_thread(
     }
 
     struct Source {
-        file: Option<File>,
+        log_lines: Vec<String>,
         subresources: BTreeMap<usize, Subresource>,
     }
 
     let mut sources = sources
         .iter()
         .enumerate()
-        .map(|(i, x)| Source {
-            file: File::create(output.join(format!("{i}.log"))).ok(),
+        .map(|(_i, x)| Source {
+            log_lines: Vec::new(),
             subresources: BTreeMap::from([(
                 0,
                 Subresource {
@@ -191,6 +191,7 @@ pub fn logging_thread(
     let width2 = (max_subresources as f64).log10().ceil() as usize;
     let mut has_errors = false;
 
+    let start_loop = std::time::Instant::now();
     for msg in channel {
         let Some(source) = sources.get_mut(msg.source) else {
             continue;
@@ -235,12 +236,9 @@ pub fn logging_thread(
             );
         }
 
-        if msg.level >= file_level
-            && let Some(ref mut file) = source.file
-        {
+        if msg.level >= file_level {
             let now = Local::now().naive_local();
-            let _ = writeln!(
-                file,
+            let line = format!(
                 "({}) [{:>width1$}{}] {}: {}",
                 now.format("%Y-%m-%d %H:%M:%S%.3f"),
                 msg.source,
@@ -258,6 +256,7 @@ pub fn logging_thread(
                 },
                 strip_ansi_escapes::strip_str(&error),
             );
+            source.log_lines.push(line);
         }
 
         // Collect sanitization action events if the message contains one
@@ -265,11 +264,23 @@ pub fn logging_thread(
             subresource.errors.push(err);
         }
     }
+    let loop_elapsed = start_loop.elapsed().as_secs_f64();
 
-    // Emit machine-readable JSON reports
-    for (i, source) in sources.into_iter().enumerate() {
-        let file_name = format!("{i}.json");
+    let start_write = std::time::Instant::now();
 
+    // 1. Write consolidated log file
+    let log_path = output.join("cassandra.log");
+    if let Ok(mut file) = File::create(&log_path) {
+        for source in &sources {
+            for line in &source.log_lines {
+                let _ = writeln!(file, "{}", line);
+            }
+        }
+    }
+
+    // 2. Write consolidated machine-readable JSON reports
+    let mut all_reports = Vec::new();
+    for source in sources {
         let reports = source
             .subresources
             .into_values()
@@ -286,13 +297,17 @@ pub fn logging_thread(
                 }
             })
             .collect_vec();
-
-        if let Ok(file) = File::create(output.join(file_name)) {
-            let _ = serde_json::to_writer_pretty(file, &reports);
-        }
+        all_reports.extend(reports);
     }
 
-    has_errors
+    let json_path = output.join("report.json");
+    if let Ok(file) = File::create(&json_path) {
+        let _ = serde_json::to_writer_pretty(file, &all_reports);
+    }
+
+    let write_elapsed = start_write.elapsed().as_secs_f64();
+
+    (has_errors, loop_elapsed, write_elapsed)
 }
 
 #[cfg(test)]
@@ -388,12 +403,12 @@ mod tests {
         drop(tx);
 
         let sources = vec![InputSource::File(PathBuf::from("test_input.html"))];
-        let has_errors =
+        let (has_errors, _, _) =
             logging_thread(&temp_dir, LogLevel::Error, LogLevel::Trace, &sources, 1, rx);
         assert!(has_errors);
 
         // Check if the report file was created
-        let report_path = temp_dir.join("0.json");
+        let report_path = temp_dir.join("report.json");
         assert!(report_path.exists());
 
         // Read and parse report
@@ -413,6 +428,6 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file(report_path);
-        let _ = std::fs::remove_file(temp_dir.join("0.log"));
+        let _ = std::fs::remove_file(temp_dir.join("cassandra.log"));
     }
 }

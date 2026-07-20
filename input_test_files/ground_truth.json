@@ -1,0 +1,16 @@
+{
+  "benign/safe.html": [],
+  "benign/crawler_test.html": [],
+  "benign/clean_doc.pdf": [],
+  "malicious/xss.html": ["event_handlers", "dangerous_scripts"],
+  "malicious/xml_bomb.html": ["xml_entity_declaration"],
+  "malicious/dangerous_script.js": ["dangerous_js"],
+  "malicious/dangerous_styles.css": ["dangerous_css"],
+  "malicious/untrusted_origins.html": ["dangerous_domain", "dangerous_origins"],
+  "malicious/ssrf_attempt.html": ["dangerous_scripts"],
+  "malicious/pdf_js_bomb.pdf": ["active_content"],
+  "malicious/idn_only.html": ["idn"],
+  "malicious/unicode_confusion.html": ["idn"],
+  "malicious/broadened_urls.html": ["dangerous_domain"],
+  "malicious/malicious_urls.html": ["dangerous_domain", "idn"]
+}

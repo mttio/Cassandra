@@ -246,9 +246,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cassandra",
+ "chrono",
  "clap",
  "colored",
+ "libc",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
  "url",
