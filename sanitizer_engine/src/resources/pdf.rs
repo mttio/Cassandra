@@ -152,6 +152,13 @@ mod tests {
 
         let js_file_data =
             std::fs::read_to_string("../input_test_files/malicious/dangerous_script.js").unwrap();
-        assert!(crate::resources::javascript::sanitize(&js_file_data).is_err());
+        assert!(
+            crate::resources::javascript::sanitize(
+                &js_file_data,
+                &NullLogger,
+                &ReplaceRule::forbid()
+            )
+            .is_err()
+        );
     }
 }

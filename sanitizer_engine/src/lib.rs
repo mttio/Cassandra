@@ -12,7 +12,7 @@ use crate::{
     crawl_session::CrawlSession,
     errors::SanitizerError,
     http_client::SanitizerHttpClient,
-    log::{ChannelLogger, LoggerMessage},
+    log::{ChannelLogger, Log, LoggerMessage},
     policy::Policy,
 };
 
@@ -78,7 +78,11 @@ pub fn library(
         ));
 
         match source {
-            InputSource::Url(url) => runtime.spawn(async { session.process_url(url).await }),
+            InputSource::Url(url) => runtime.spawn(async move {
+                if let Err(e) = session.process_url(url).await {
+                    session.logger.error(e);
+                }
+            }),
             InputSource::File(path) => runtime.spawn(lazy(move |_| session.process_file(path))),
         };
     }

@@ -139,16 +139,13 @@ impl CrawlSession {
             }
             Some(KnownResourceType::Js) => {
                 let js_str = String::from_utf8_lossy(&fetched.data);
-                if let Some(x) =
-                    self.policy
-                        .resources
-                        .dangerous_js
-                        .check(&js_str, 0..js_str.len(), logger)?
-                {
-                    x.as_bytes().to_vec()
-                } else {
-                    fetched.data
-                }
+                let content = crate::resources::javascript::sanitize(
+                    &js_str,
+                    logger,
+                    &self.policy.resources.dangerous_js,
+                )?;
+
+                content.as_bytes().to_vec()
             }
             Some(KnownResourceType::Pdf) => {
                 crate::resources::pdf::sanitize(
@@ -257,18 +254,13 @@ impl CrawlSession {
     fn process_js_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
         let output_path = self.output_dir.join(format!("{}.js", self.index()));
         let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
-        let js_str = String::from_utf8_lossy(&data);
+        let content = crate::resources::javascript::sanitize(
+            &String::from_utf8_lossy(&data),
+            &self.logger,
+            &self.policy.resources.dangerous_js,
+        )?;
 
-        let to_write = if let Some(x) =
-            self.policy
-                .resources
-                .dangerous_js
-                .check(&js_str, 0..js_str.len(), &self.logger)?
-        {
-            x.as_bytes().to_vec()
-        } else {
-            data
-        };
+        let to_write = content.as_bytes().to_vec();
 
         fs::write(&output_path, to_write).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
 
@@ -320,29 +312,22 @@ impl CrawlSession {
     }
 
     /// Worker task fetching a remote HTML document, sanitizing it, and enqueuing referenced sub-resources.
-    pub async fn process_url(self: Arc<Self>, url: Url) {
-        if let Some((original, replacement)) = detect_idn(&url)
-            && let Err(e) = self.policy.urls.idn_connection.handle(
+    pub async fn process_url(self: &Arc<Self>, url: Url) -> Result<(), SanitizerError> {
+        if let Some((original, replacement)) = detect_idn(&url) {
+            self.policy.urls.idn_connection.handle(
                 &self.logger,
                 RuleError::IdnConnection {
                     original: original.to_owned(),
                     converted: replacement.to_owned(),
                 },
-            )
-        {
-            self.logger.error(e);
-            return;
+            )?;
         }
 
-        if let Some(host) = url.host().map(|x| x.to_owned())
-            && let Err(e) = self
-                .policy
+        if let Some(host) = url.host().map(|x| x.to_owned()) {
+            self.policy
                 .connections
                 .dangerous_domain
-                .check((&host, &self.policy.urls.dangerous_domains), &self.logger)
-        {
-            self.logger.error(e);
-            return;
+                .check((&host, &self.policy.urls.dangerous_domains), &self.logger)?;
         }
 
         let index = self.index();
@@ -355,13 +340,7 @@ impl CrawlSession {
         let CrawlerState {
             base: final_base,
             subresources: discovered,
-        } = match fetch_result {
-            Ok(res) => res,
-            Err(e) => {
-                self.logger.error(e);
-                return;
-            }
-        };
+        } = fetch_result?;
 
         // Record the main HTML page request and visit
         {
@@ -373,5 +352,7 @@ impl CrawlSession {
         for (sub_url, local_name) in discovered {
             self.try_enqueue_subresource(sub_url, local_name, 1);
         }
+
+        Ok(())
     }
 }

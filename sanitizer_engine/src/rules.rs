@@ -17,18 +17,16 @@ use crate::{
 )]
 pub(crate) struct JsReplace(String);
 
-impl Verify for JsReplace {
-    type Input<'a> = &'a str;
+impl Replaceable for JsReplace {
+    type Input = String;
     type Output = String;
 
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
+    fn to_error(value: Self::Input) -> RuleReplaceError {
+        RuleReplaceError::DangerousJsConstruct { original: value }
     }
 
-    fn verify(value: &Self::Input<'_>) -> Option<RuleReplaceError> {
-        crate::resources::javascript::sanitize(value)
-            .err()
-            .map(|x| RuleReplaceError::DangerousJsConstruct { original: x })
+    fn to_replacement(&self) -> Self::Output {
+        self.as_ref().to_owned()
     }
 }
 
@@ -52,20 +50,18 @@ pub struct ReplaceRule<R> {
     level: LogLevel,
 }
 
-pub trait Verify {
-    /// The type of the value to be verified
-    type Input<'a>
-    where
-        Self: 'a;
+/// A trait used by rules to describe replacement inside files and error conversion
+pub trait Replaceable {
+    /// The type of value to convert to the corresponding error
+    type Input;
     /// The type of the replacement value
     type Output: ToString;
 
-    /// Verifies that the specified value is allowed.
-    /// Returns `Some(...)` if not allowed.
-    fn verify(value: &Self::Input<'_>) -> Option<RuleReplaceError>;
+    /// Converts the provided value to a `RuleReplaceError`
+    fn to_error(value: Self::Input) -> RuleReplaceError;
 
     /// Convert `self` to the replacement value
-    fn to_output(&self) -> Self::Output;
+    fn to_replacement(&self) -> Self::Output;
 }
 
 pub trait Verify2 {
@@ -82,22 +78,16 @@ pub trait Verify2 {
 )]
 pub struct CssUrl(String);
 
-impl Verify for CssUrl {
-    type Input<'a> = &'a str;
+impl Replaceable for CssUrl {
+    type Input = String;
     type Output = String;
 
-    fn to_output(&self) -> Self::Output {
-        self.deref().to_owned()
+    fn to_error(value: Self::Input) -> RuleReplaceError {
+        RuleReplaceError::DangerousCssConstruct { original: value }
     }
 
-    fn verify(value: &Self::Input<'_>) -> Option<RuleReplaceError> {
-        if value.starts_with("data:") || value.starts_with("javascript:") {
-            Some(RuleReplaceError::DangerousCssConstruct {
-                original: (*value).to_owned(),
-            })
-        } else {
-            None
-        }
+    fn to_replacement(&self) -> Self::Output {
+        self.deref().to_owned()
     }
 }
 
@@ -116,64 +106,37 @@ impl<R: Default> ReplaceRule<R> {
         }
     }
 
+    pub fn forbid() -> Self {
+        Self::keep(LogLevel::Error)
+    }
+
     pub fn with_default(level: LogLevel) -> Self {
         Self::new(R::default(), level)
     }
 }
 
-impl<R: Default + Verify> ReplaceRule<R> {
-    pub fn check(
+impl<R: Default + Replaceable> ReplaceRule<R> {
+    pub fn handle(
         &self,
-        value: R::Input<'_>,
+        value: R::Input,
         offset: Range<usize>,
         logger: &impl Log,
     ) -> Result<Option<R::Output>, RuleError> {
-        match R::verify(&value) {
-            None => Ok(None),
-            Some(e) => {
-                if self.level == LogLevel::Error {
-                    Err(RuleError::Replace {
-                        inner: e,
-                        replacement: None,
-                        offset,
-                    })
-                } else {
-                    let replacement = self.replace.as_ref().map(R::to_output);
-                    logger.log(
-                        self.level,
-                        RuleError::Replace {
-                            inner: e,
-                            replacement: replacement.as_ref().map(|x| x.to_string()),
-                            offset,
-                        },
-                    );
-                    Ok(replacement)
-                }
-            }
-        }
-    }
-}
+        let e = R::to_error(value);
 
-impl<R: Default + ToString> ReplaceRule<R> {
-    pub fn handle(
-        &self,
-        offset: Range<usize>,
-        error: RuleReplaceError,
-        logger: &impl Log,
-    ) -> Result<Option<String>, RuleError> {
         if self.level == LogLevel::Error {
             Err(RuleError::Replace {
-                inner: error,
+                inner: e,
                 replacement: None,
                 offset,
             })
         } else {
-            let replacement = self.replace.as_ref().map(R::to_string);
+            let replacement = self.replace.as_ref().map(R::to_replacement);
             logger.log(
                 self.level,
                 RuleError::Replace {
-                    inner: error,
-                    replacement: replacement.clone(),
+                    inner: e,
+                    replacement: replacement.as_ref().map(|x| x.to_string()),
                     offset,
                 },
             );
@@ -181,6 +144,7 @@ impl<R: Default + ToString> ReplaceRule<R> {
         }
     }
 }
+
 impl<'de, R: Default + Deserialize<'de>> Deserialize<'de> for ReplaceRule<R> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -363,11 +327,24 @@ pub fn sanitize_attribute(s: &str) -> String {
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq, Display),
+    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
     sanitize(with = |x| sanitize_attribute(&x)),
     default = "#"
 )]
 pub struct Idn(String);
+
+impl Replaceable for Idn {
+    type Input = String;
+    type Output = String;
+
+    fn to_error(value: Self::Input) -> RuleReplaceError {
+        RuleReplaceError::Idn { original: value }
+    }
+
+    fn to_replacement(&self) -> Self::Output {
+        self.as_ref().to_owned()
+    }
+}
 
 #[nutype(
     derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
@@ -376,22 +353,16 @@ pub struct Idn(String);
 )]
 pub struct EventHandlers(String);
 
-impl Verify for EventHandlers {
-    type Input<'a> = &'a lol_html::html_content::Attribute<'a>;
+impl Replaceable for EventHandlers {
+    type Input = String;
     type Output = String;
 
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
+    fn to_error(value: Self::Input) -> RuleReplaceError {
+        RuleReplaceError::EventHandler { original: value }
     }
 
-    fn verify(value: &Self::Input<'_>) -> Option<RuleReplaceError> {
-        let name = value.name().to_lowercase();
-
-        if name.starts_with("on") {
-            Some(RuleReplaceError::EventHandler { original: name })
-        } else {
-            None
-        }
+    fn to_replacement(&self) -> Self::Output {
+        self.as_ref().to_owned()
     }
 }
 
@@ -401,18 +372,16 @@ impl Verify for EventHandlers {
 )]
 pub struct XmlEntities(String);
 
-impl Verify for XmlEntities {
-    type Input<'a> = &'a str;
+impl Replaceable for XmlEntities {
+    type Input = String;
     type Output = String;
 
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
+    fn to_error(value: Self::Input) -> RuleReplaceError {
+        RuleReplaceError::XmlEntityDeclaration { original: value }
     }
 
-    fn verify(value: &Self::Input<'_>) -> Option<RuleReplaceError> {
-        Some(RuleReplaceError::XmlEntityDeclaration {
-            original: (*value).to_owned(),
-        })
+    fn to_replacement(&self) -> Self::Output {
+        self.as_ref().to_owned()
     }
 }
 
@@ -423,24 +392,16 @@ impl Verify for XmlEntities {
 )]
 pub struct DangerousUris(String);
 
-impl Verify for DangerousUris {
-    type Input<'a> = &'a lol_html::html_content::Attribute<'a>;
+impl Replaceable for DangerousUris {
+    type Input = String;
     type Output = String;
 
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
+    fn to_error(value: Self::Input) -> RuleReplaceError {
+        RuleReplaceError::DangerousUri { original: value }
     }
 
-    fn verify(value: &Self::Input<'_>) -> Option<RuleReplaceError> {
-        let attr_value = value.value().trim().to_lowercase();
-
-        if attr_value.starts_with("javascript:") || attr_value.starts_with("data:") {
-            Some(RuleReplaceError::DangerousUri {
-                original: attr_value,
-            })
-        } else {
-            None
-        }
+    fn to_replacement(&self) -> Self::Output {
+        self.as_ref().to_owned()
     }
 }
 
@@ -468,22 +429,16 @@ impl Verify2 for DangerousDomain {
 )]
 pub struct DangerousDomain2(String);
 
-impl Verify for DangerousDomain2 {
-    type Input<'a> = (&'a Host, &'a [PolicyHost]);
+impl Replaceable for DangerousDomain2 {
+    type Input = Host;
     type Output = String;
 
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
+    fn to_error(value: Self::Input) -> RuleReplaceError {
+        RuleReplaceError::DangerousDomain { original: value }
     }
 
-    fn verify(&(host, domains): &Self::Input<'_>) -> Option<RuleReplaceError> {
-        if domains.iter().any(|x| host_matches(host, &x.0)) {
-            Some(RuleReplaceError::DangerousDomain {
-                original: host.to_owned(),
-            })
-        } else {
-            None
-        }
+    fn to_replacement(&self) -> Self::Output {
+        self.as_ref().to_owned()
     }
 }
 
@@ -494,24 +449,17 @@ impl Verify for DangerousDomain2 {
 )]
 pub struct DangerousScripts(String);
 
-impl Verify for DangerousScripts {
-    type Input<'a> = (&'a String, &'a [String]);
+impl Replaceable for DangerousScripts {
+    type Input = String;
     type Output = String;
 
-    fn to_output(&self) -> Self::Output {
+    fn to_replacement(&self) -> Self::Output {
         self.as_ref().to_owned()
     }
 
-    fn verify(&(script, allowed): &Self::Input<'_>) -> Option<RuleReplaceError> {
-        if allowed
-            .iter()
-            .any(|allowed| allowed == script || script.starts_with(allowed))
-        {
-            None
-        } else {
-            Some(RuleReplaceError::DangerousScript {
-                original: Some(script.to_owned()),
-            })
+    fn to_error(value: Self::Input) -> RuleReplaceError {
+        RuleReplaceError::DangerousScript {
+            original: Some(value),
         }
     }
 }
@@ -523,30 +471,18 @@ impl Verify for DangerousScripts {
 )]
 pub struct DangerousOrigins(String);
 
-impl Verify for DangerousOrigins {
-    type Input<'a> = (&'a Url, &'a [PolicyHost], &'a str);
+impl Replaceable for DangerousOrigins {
+    type Input = (Url, String);
     type Output = String;
 
-    fn to_output(&self) -> Self::Output {
-        self.as_ref().to_owned()
+    fn to_error((url, tag): Self::Input) -> RuleReplaceError {
+        RuleReplaceError::DangerousOrigin {
+            tag,
+            original: url.to_string(),
+        }
     }
 
-    fn verify(&(url, allowed, tag): &Self::Input<'_>) -> Option<RuleReplaceError> {
-        let matched = if let Some(host) = url.host().map(|x| x.to_owned()) {
-            allowed
-                .iter()
-                .any(|allowed| host_matches(&host, &allowed.0))
-        } else {
-            false
-        };
-
-        if !matched {
-            Some(RuleReplaceError::DangerousOrigin {
-                tag: tag.to_owned(),
-                original: url.to_string(),
-            })
-        } else {
-            None
-        }
+    fn to_replacement(&self) -> Self::Output {
+        self.as_ref().to_owned()
     }
 }

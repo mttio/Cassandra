@@ -35,7 +35,7 @@ pub enum RuleError {
     #[error(
         "connecting to IDN host: `{}` {} `{}`",
         original.pretty(),
-        "->".bright_yellow(),
+        "->".yellow(),
         converted.pretty(),
     )]
     #[serde(rename = "idn_connection")]
@@ -84,7 +84,7 @@ pub enum RuleError {
     #[error(
         "{inner}{} {}",
         match replacement {
-            Some(x) => format!(" {} `{}`", "->".bright_yellow(), x.pretty()),
+            Some(x) => format!(" {} `{}`", "->".yellow(), x.pretty()),
             None => "".to_owned(),
         },
         format_range(offset),

@@ -1,5 +1,11 @@
 use itertools::Itertools;
 
+use crate::{
+    errors::SanitizerError,
+    log::Log,
+    rules::{JsReplace, ReplaceRule},
+};
+
 /// Scans JS file for dangerous constructs (eval, document.write).
 ///
 /// # Inputs
@@ -7,7 +13,11 @@ use itertools::Itertools;
 ///
 /// # Returns
 /// * `Result<(), SanitizationError>` - `Ok` if no dangerous keywords are found, otherwise an `Err` indicating what was found.
-pub fn sanitize(content: &str) -> Result<(), String> {
+pub fn sanitize(
+    content: &str,
+    logger: &impl Log,
+    rule: &ReplaceRule<JsReplace>,
+) -> Result<String, SanitizerError> {
     let mut chars = content.chars().peekable();
     while let Some(c) = chars.next() {
         if c == 'e' {
@@ -21,7 +31,11 @@ pub fn sanitize(content: &str) -> Result<(), String> {
                     }
                 }
                 if temp.peek() == Some(&'(') {
-                    return Err("eval(...)".to_owned());
+                    if let Some(replace) =
+                        rule.handle("eval(...)".to_owned(), 0..content.len(), logger)?
+                    {
+                        return Ok(replace);
+                    }
                 }
             }
         }
@@ -32,31 +46,43 @@ pub fn sanitize(content: &str) -> Result<(), String> {
                 if temp.next() == Some('.') {
                     let mut temp = temp.skip_while(|c| c.is_whitespace());
                     if temp.next_array() == Some(['w', 'r', 'i', 't', 'e']) {
-                        return Err("document.write(...)".to_owned());
+                        if let Some(replace) =
+                            rule.handle("document.write(...)".to_owned(), 0..content.len(), logger)?
+                        {
+                            return Ok(replace);
+                        }
                     }
                 }
             }
         }
     }
 
-    Ok(())
+    Ok(content.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::log::NullLogger;
+
     use super::*;
 
     #[test]
     fn test_sanitize() {
-        assert!(sanitize("console.log('hello');").is_ok());
-        assert!(sanitize("eval('1 + 1');").is_err());
-        assert!(sanitize("document.write('xss');").is_err());
+        let rule = ReplaceRule::forbid();
+        let logger = NullLogger;
+
+        assert!(sanitize("console.log('hello');", &logger, &rule).is_ok());
+        assert!(sanitize("eval('1 + 1');", &logger, &rule).is_err());
+        assert!(sanitize("document.write('xss');", &logger, &rule).is_err());
     }
 
     #[test]
     fn test_sanitize_spaces() {
-        assert!(sanitize("eval    (  '1+1'  )").is_err());
-        assert!(sanitize("let evaluator = 1;").is_ok());
-        assert!(sanitize("document.write()").is_err());
+        let rule = ReplaceRule::forbid();
+        let logger = NullLogger;
+
+        assert!(sanitize("eval    (  '1+1'  )", &logger, &rule).is_err());
+        assert!(sanitize("let evaluator = 1;", &logger, &rule).is_ok());
+        assert!(sanitize("document.write()", &logger, &rule).is_err());
     }
 }

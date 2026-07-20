@@ -1,9 +1,10 @@
 use url::Url;
 
 use crate::{
-    errors::SanitizerError,
+    errors::RuleError,
     log::Log,
     rules::{CssUrl, ReplaceRule},
+    url::is_dangerous_uri,
 };
 
 /// Scans CSS content for @import and url(...) references, validates/rewrites them, and extracts them.
@@ -21,7 +22,7 @@ pub fn sanitize(
     base_url: &Url,
     logger: &impl Log,
     rule: &ReplaceRule<CssUrl>,
-) -> Result<(String, Vec<(Url, String)>), SanitizerError> {
+) -> Result<(String, Vec<(Url, String)>), RuleError> {
     let mut output = String::new();
     let mut extracted = Vec::new();
     let chars: Vec<char> = css.chars().collect();
@@ -123,11 +124,17 @@ pub fn sanitize(
 
             let url = read_url_string(&chars, &mut i, ')');
 
-            let url_clean = url.trim().to_string();
-            if let Some(replace) = rule.check(&url_clean, offset..offset + url.len(), logger)? {
-                output.push_str(&format!("url(\"{replace}\")"));
-            } else if let Ok(resolved_url) = base_url.join(&url_clean) {
-                let ext = url_clean
+            let clean = url.trim();
+            if is_dangerous_uri(clean) {
+                if let Some(replace) =
+                    rule.handle(url.clone(), offset..offset + url.len(), logger)?
+                {
+                    output.push_str(&format!("url(\"{replace}\")"));
+                } else {
+                    output.push_str(&format!("url(\"{url}\")"));
+                }
+            } else if let Ok(resolved_url) = base_url.join(clean) {
+                let ext = clean
                     .rsplit('.')
                     .next()
                     .unwrap_or("bin")

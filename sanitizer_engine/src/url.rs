@@ -31,6 +31,10 @@ pub fn host_matches(host: &Host, target: &Host) -> bool {
     }
 }
 
+pub fn is_dangerous_uri(uri: &str) -> bool {
+    uri.starts_with("data:") || uri.starts_with("javascript:")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

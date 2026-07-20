@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::InputSource;
-use crate::errors::{RuleError, SanitizerMessage};
+use crate::errors::{RuleError, SanitizerError, SanitizerMessage};
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -37,7 +37,7 @@ impl LogLevel {
 }
 
 /// A trait for logging messages
-pub trait Log: Sync {
+pub trait Log: Sync + Clone {
     fn log<T: Into<SanitizerMessage>>(&self, level: LogLevel, message: T);
 
     #[inline]
@@ -65,7 +65,53 @@ pub trait Log: Sync {
         self.log(LogLevel::Error, message);
     }
 
+    /// Creates a new logger for a different subresource
     fn subresource(&self, index: usize) -> Self;
+
+    // Creates a new logger with an offset, for nested content
+    fn inner_content(&self, offset: usize) -> LoggerWithOffset<Self> {
+        LoggerWithOffset {
+            offset,
+            inner: self.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LoggerWithOffset<T> {
+    offset: usize,
+    inner: T,
+}
+
+impl<L: Log> Log for LoggerWithOffset<L> {
+    fn log<T: Into<SanitizerMessage>>(&self, level: LogLevel, message: T) {
+        let message = message.into();
+
+        if let SanitizerMessage::Error(SanitizerError::Rule(RuleError::Replace {
+            inner,
+            replacement,
+            offset,
+        })) = message
+        {
+            self.inner.log(
+                level,
+                RuleError::Replace {
+                    inner,
+                    replacement,
+                    offset: offset.start + self.offset..offset.end + self.offset,
+                },
+            );
+        } else {
+            self.inner.log(level, message);
+        }
+    }
+
+    fn subresource(&self, index: usize) -> Self {
+        LoggerWithOffset {
+            offset: self.offset,
+            inner: self.inner.subresource(index),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -141,7 +187,7 @@ impl Log for VecLogger {
 }
 
 /// A logger that discards all messages
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct NullLogger;
 
 impl Log for NullLogger {
@@ -174,8 +220,7 @@ pub fn logging_thread(
 
     let mut sources = sources
         .iter()
-        .enumerate()
-        .map(|(_i, x)| Source {
+        .map(|x| Source {
             log_lines: Vec::new(),
             subresources: BTreeMap::from([(
                 0,

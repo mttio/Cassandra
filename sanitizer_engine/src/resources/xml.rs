@@ -77,8 +77,8 @@ impl XmlReader {
                     let end = self.length + self.buffer.len();
                     self.length = end;
 
-                    if let Some(replace) = policy.html.xml_entities.check(
-                        &String::from_utf8_lossy(&self.buffer),
+                    if let Some(replace) = policy.html.xml_entities.handle(
+                        String::from_utf8_lossy(&self.buffer).into_owned(),
                         start..end,
                         logger,
                     )? {
