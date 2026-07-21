@@ -120,7 +120,7 @@ impl Default for UrlsPolicy {
     }
 }
 
-/// Rule for handling resource files
+/// Rules for handling resource files
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ResourcesPolicy {

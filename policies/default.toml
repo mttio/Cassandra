@@ -1,30 +1,88 @@
+# List of rules that the sanitizer follows
+#
+#
+# Most rules have an associated severity level. The levels are:
+# - debug
+# - trace
+# - info
+# - warn
+# - error
+#
+# When the program detects a violation of a rule:
+# - if the rule is configured with `error`, the program stops processing the resource
+# - otherwise, the violation is only logged
+#
+#
+# Some rules (marked with *Replaceable*) can be configured with a custom replacement message.
+# They can be specified in different ways:
+#  rule = "level"                          # only log level, replaces with default value
+#  rule = true                             # same as "warn"
+#  rule = false                            # doesn't replace, log level is "warn"
+#  rule = value                            # custom replacement value, log level is "warn"
+#  rule = { replace = ..., level = ... }   # both replacement value and log level
+#  rule = { replace = true, level = ... }  # replaces with default value
+#  rule = { replace = false, level = ... } # doesn't replace
+
+
+# Rules for handling HTML files
 [html]
+# List of allowed script sources.
 allow_scripts = []
+# List of allowed origins for content tags
 allow_origins = ["trusted.com"]
-event_handlers = "info"
-dangerous_scripts = "error"
+# Handles event handler attributes. *Replaceable*
+event_handlers = { level = "info", replace = "" }
+# Handles custom xml entities (potential XML bomb). *Replaceable*
 xml_entities = "error"
+# Handles `<meta http-equiv="Refresh">` tags. *Replaceable*
+meta_refresh = { level = "warn", replace = "" }
+# Handles dangerous (not allowed) scripts in `<script>` tags. *Replaceable*
+dangerous_scripts = "error"
+# Handles dangerous origins in `<iframe>` and `<object>` tags. *Replaceable*
+dangerous_origins = "error"
+# Handles dangerous domains (see `urls.dangerous_domains`). *Replaceable*
+dangerous_domain = "error"
+# Handles dangerous URIs (`javascript:...`, `data:...`) in tag attributes. *Replaceable*
+dangerous_uris = { level = "info", replace = "#" }
 
+# Rules for handling URLs
 [urls]
-dangerous_domains = [
-  "malicious-domain.com",
-  "evil.com",
-]
-idn = "warn"
+# List of domains considered **dangerous**
+# Ignores prefix labels (e.g. `wikipedia.org` matches `www.wikipedia.org`)
+dangerous_domains = ["malicious-domain.com", "evil.com"]
+# Handles IDN urls detected in files. *Replaceable*
+idn = { level = "warn", replace = "#" }
+# Handles connecting to IDN urls
+idn_connection = "warn"
 
+# Rules for handling resource files
 [resources]
+# Whether to fetch subresources references in processed files
 fetch_sub_resources = true
-max_depth = 1
+# Maximum subresource depth
+max_depth = { value = 1, level = "error" }
+# Maximum subresource amount
 max_requests = { value = 5, level = "error" }
+# Maximum resource length
 max_bytes = { value = 1048576, level = "error" }
+# Handles mismatches MIME types
+mismatched_mime = "error"
+# Handles unknown resource types
 unknown_resource = "error"
+# Handles active content in PDF files
+pdf_active_content = "error"
+# Handles dangerous constructs in JS files
+dangerous_js = "error"
 
+# Rules for handling http requests
 [connections]
+# Maximum timeout for the connection phase of a request
 connection_timeout = "3s"
+# Maximum timeout for a request (including reading the body)
 overall_timeout = "15s"
-max_redirects = {
-  value = 2,
-  level = "error"
-}
+# Maximum number of redirects for a single request
+max_redirects = { value = 2, level = "error" }
+# User agent to include in every request
 user_agent = "cassandra/0.1.0"
+# Handles connections to dangerous domain (see `urls.dangerous_domains`)
 dangerous_domain = "error"

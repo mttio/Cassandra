@@ -60,7 +60,7 @@ pub trait Verify2 {
 impl<R: Default> ReplaceRule<R> {
     pub fn new(replace: impl Into<R>, level: LogLevel) -> Self {
         Self {
-            replace: Some(replace.into()),
+            replace: (level != LogLevel::Error).then_some(replace.into()),
             level,
         }
     }
@@ -121,21 +121,18 @@ impl<'de, R: Default + Deserialize<'de>> Deserialize<'de> for ReplaceRule<R> {
         enum Inner<R> {
             Level(LogLevel),
             Bool(bool),
-            Value { replace: R },
+            Value(R),
             ValueLevel { replace: R, level: LogLevel },
             BoolLevel { replace: bool, level: LogLevel },
         }
 
         Ok(match Inner::deserialize(deserializer)? {
-            Inner::Level(level) => Self {
-                replace: Some(R::default()),
-                level,
-            },
+            Inner::Level(level) => Self::with_default(level),
             Inner::Bool(replace) => Self {
                 replace: replace.then(R::default),
                 level: LogLevel::Warn,
             },
-            Inner::Value { replace } => Self {
+            Inner::Value(replace) => Self {
                 replace,
                 level: LogLevel::Warn,
             },
