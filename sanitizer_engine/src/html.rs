@@ -33,11 +33,7 @@ fn sanitize_url(
 
         // Check IDN
         if let Some((original, _)) = detect_idn(&url)
-            && let Some(r) =
-                policy
-                    .urls
-                    .idn
-                    .handle(original.to_owned(), location.clone(), logger)?
+            && let Some(r) = policy.urls.idn.handle(original, location.clone(), logger)?
         {
             replacement = Some(r);
         }
@@ -317,11 +313,11 @@ pub fn create_rewriter<'a, W: Write>(
                             } else {
                                 false
                             }
-                        }) && let Some(replace) = policy.html.dangerous_scripts.handle(
-                            host.to_string(),
-                            location,
-                            logger,
-                        )? {
+                        }) && let Some(replace) = policy
+                            .html
+                            .dangerous_scripts
+                            .handle(host, location, logger)?
+                        {
                             replace_attribute(&replace, "src", el);
                         }
                     };

@@ -89,6 +89,7 @@ impl<L: Log> Log for LoggerWithOffset<L> {
 
         if let SanitizerMessage::Error(SanitizerError::Rule(RuleError::Replace {
             inner,
+            original,
             replacement,
             location,
         })) = message
@@ -97,6 +98,7 @@ impl<L: Log> Log for LoggerWithOffset<L> {
                 level,
                 RuleError::Replace {
                     inner,
+                    original,
                     replacement,
                     location: location.start + self.offset..location.end + self.offset,
                 },
@@ -410,7 +412,7 @@ mod tests {
         std::assert_matches!(
             msg.message,
             SanitizerMessage::Error(SanitizerError::Rule(RuleError::Replace {
-                inner: RuleReplaceError::XmlEntityDeclaration { .. },
+                inner: RuleReplaceError::XmlEntityDeclaration,
                 ..
             }))
         );
@@ -422,9 +424,8 @@ mod tests {
         use std::path::PathBuf;
 
         let err = RuleError::Replace {
-            inner: RuleReplaceError::DangerousScript {
-                original: Some("evil_script()".to_owned()),
-            },
+            inner: RuleReplaceError::DangerousScript,
+            original: "evil_script()".to_owned(),
             replacement: None,
             location: 10..20,
         };
@@ -465,7 +466,7 @@ mod tests {
         assert!(matches!(
             report.actions[0],
             RuleError::Replace {
-                inner: RuleReplaceError::DangerousScript { .. },
+                inner: RuleReplaceError::DangerousScript,
                 ..
             }
         ));

@@ -31,8 +31,7 @@ pub fn sanitize(
                     }
                 }
                 if temp.peek() == Some(&'(')
-                    && let Some(replace) =
-                        rule.handle("eval(...)".to_owned(), 0..content.len(), logger)?
+                    && let Some(replace) = rule.handle("eval(...)", 0..content.len(), logger)?
                 {
                     return Ok(replace);
                 }
@@ -46,7 +45,7 @@ pub fn sanitize(
                     let mut temp = temp.skip_while(|c| c.is_whitespace());
                     if temp.next_array() == Some(['w', 'r', 'i', 't', 'e'])
                         && let Some(replace) =
-                            rule.handle("document.write(...)".to_owned(), 0..content.len(), logger)?
+                            rule.handle("document.write(...)", 0..content.len(), logger)?
                     {
                         return Ok(replace);
                     }

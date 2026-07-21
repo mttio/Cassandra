@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
-use url::{Host, Url};
+use url::Host;
 
 use crate::{
     errors::{RuleError, RuleReplaceError},
@@ -18,14 +18,11 @@ use crate::{
 pub(crate) struct JsReplace(String);
 
 impl Replaceable for JsReplace {
-    type Input = String;
-    type Output = String;
-
-    fn to_error(original: Self::Input) -> RuleReplaceError {
-        RuleReplaceError::DangerousJsConstruct { original }
+    fn to_error() -> RuleReplaceError {
+        RuleReplaceError::DangerousJsConstruct
     }
 
-    fn to_replacement(&self) -> Self::Output {
+    fn to_replacement(&self) -> String {
         self.as_ref().to_owned()
     }
 }
@@ -52,16 +49,11 @@ pub struct ReplaceRule<R> {
 
 /// A trait used by rules to describe replacement inside files and error conversion
 pub trait Replaceable {
-    /// The type of value to convert to the corresponding error
-    type Input;
-    /// The type of the replacement value
-    type Output: ToString;
-
-    /// Converts the provided value to a `RuleReplaceError`
-    fn to_error(value: Self::Input) -> RuleReplaceError;
+    /// Returns the associated `RuleReplaceError`
+    fn to_error() -> RuleReplaceError;
 
     /// Convert `self` to the replacement value
-    fn to_replacement(&self) -> Self::Output;
+    fn to_replacement(&self) -> String;
 }
 
 pub trait Verify2 {
@@ -99,15 +91,14 @@ impl<R: Default> ReplaceRule<R> {
 impl<R: Default + Replaceable> ReplaceRule<R> {
     pub fn handle(
         &self,
-        value: R::Input,
+        value: impl ToString,
         location: Range<usize>,
         logger: &impl Log,
-    ) -> Result<Option<R::Output>, RuleError> {
-        let e = R::to_error(value);
-
+    ) -> Result<Option<String>, RuleError> {
         if self.level == LogLevel::Error {
             Err(RuleError::Replace {
-                inner: e,
+                inner: R::to_error(),
+                original: value.to_string(),
                 replacement: None,
                 location,
             })
@@ -116,7 +107,8 @@ impl<R: Default + Replaceable> ReplaceRule<R> {
             logger.log(
                 self.level,
                 RuleError::Replace {
-                    inner: e,
+                    inner: R::to_error(),
+                    original: value.to_string(),
                     replacement: replacement.as_ref().map(|x| x.to_string()),
                     location,
                 },
@@ -315,14 +307,11 @@ pub fn sanitize_attribute(s: &str) -> String {
 pub struct Idn(String);
 
 impl Replaceable for Idn {
-    type Input = String;
-    type Output = String;
-
-    fn to_error(original: Self::Input) -> RuleReplaceError {
-        RuleReplaceError::Idn { original }
+    fn to_error() -> RuleReplaceError {
+        RuleReplaceError::Idn
     }
 
-    fn to_replacement(&self) -> Self::Output {
+    fn to_replacement(&self) -> String {
         self.as_ref().to_owned()
     }
 }
@@ -335,14 +324,11 @@ impl Replaceable for Idn {
 pub struct EventHandlers(String);
 
 impl Replaceable for EventHandlers {
-    type Input = String;
-    type Output = String;
-
-    fn to_error(original: Self::Input) -> RuleReplaceError {
-        RuleReplaceError::EventHandler { original }
+    fn to_error() -> RuleReplaceError {
+        RuleReplaceError::EventHandler
     }
 
-    fn to_replacement(&self) -> Self::Output {
+    fn to_replacement(&self) -> String {
         self.as_ref().to_owned()
     }
 }
@@ -354,14 +340,11 @@ impl Replaceable for EventHandlers {
 pub struct XmlEntities(String);
 
 impl Replaceable for XmlEntities {
-    type Input = String;
-    type Output = String;
-
-    fn to_error(original: Self::Input) -> RuleReplaceError {
-        RuleReplaceError::XmlEntityDeclaration { original }
+    fn to_error() -> RuleReplaceError {
+        RuleReplaceError::XmlEntityDeclaration
     }
 
-    fn to_replacement(&self) -> Self::Output {
+    fn to_replacement(&self) -> String {
         self.as_ref().to_owned()
     }
 }
@@ -373,14 +356,11 @@ impl Replaceable for XmlEntities {
 pub struct MetaRefresh(String);
 
 impl Replaceable for MetaRefresh {
-    type Input = String;
-    type Output = String;
-
-    fn to_error(original: Self::Input) -> RuleReplaceError {
-        RuleReplaceError::MetaRefresh { original }
+    fn to_error() -> RuleReplaceError {
+        RuleReplaceError::MetaRefresh
     }
 
-    fn to_replacement(&self) -> Self::Output {
+    fn to_replacement(&self) -> String {
         self.as_ref().to_owned()
     }
 }
@@ -392,14 +372,11 @@ impl Replaceable for MetaRefresh {
 pub struct DangerousUris(String);
 
 impl Replaceable for DangerousUris {
-    type Input = String;
-    type Output = String;
-
-    fn to_error(original: Self::Input) -> RuleReplaceError {
-        RuleReplaceError::DangerousUri { original }
+    fn to_error() -> RuleReplaceError {
+        RuleReplaceError::DangerousUri
     }
 
-    fn to_replacement(&self) -> Self::Output {
+    fn to_replacement(&self) -> String {
         self.as_ref().to_owned()
     }
 }
@@ -429,14 +406,11 @@ impl Verify2 for DangerousDomain {
 pub struct DangerousDomain2(String);
 
 impl Replaceable for DangerousDomain2 {
-    type Input = Host;
-    type Output = String;
-
-    fn to_error(original: Self::Input) -> RuleReplaceError {
-        RuleReplaceError::DangerousDomain { original }
+    fn to_error() -> RuleReplaceError {
+        RuleReplaceError::DangerousDomain
     }
 
-    fn to_replacement(&self) -> Self::Output {
+    fn to_replacement(&self) -> String {
         self.as_ref().to_owned()
     }
 }
@@ -449,17 +423,12 @@ impl Replaceable for DangerousDomain2 {
 pub struct DangerousScripts(String);
 
 impl Replaceable for DangerousScripts {
-    type Input = String;
-    type Output = String;
-
-    fn to_replacement(&self) -> Self::Output {
-        self.as_ref().to_owned()
+    fn to_error() -> RuleReplaceError {
+        RuleReplaceError::DangerousScript
     }
 
-    fn to_error(original: Self::Input) -> RuleReplaceError {
-        RuleReplaceError::DangerousScript {
-            original: Some(original),
-        }
+    fn to_replacement(&self) -> String {
+        self.as_ref().to_owned()
     }
 }
 
@@ -471,16 +440,11 @@ impl Replaceable for DangerousScripts {
 pub struct DangerousOrigins(String);
 
 impl Replaceable for DangerousOrigins {
-    type Input = Url;
-    type Output = String;
-
-    fn to_error(original: Self::Input) -> RuleReplaceError {
-        RuleReplaceError::DangerousOrigin {
-            original: original.to_string(),
-        }
+    fn to_error() -> RuleReplaceError {
+        RuleReplaceError::DangerousOrigin
     }
 
-    fn to_replacement(&self) -> Self::Output {
+    fn to_replacement(&self) -> String {
         self.as_ref().to_owned()
     }
 }

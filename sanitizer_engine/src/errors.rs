@@ -101,7 +101,8 @@ pub enum RuleError {
     #[serde(rename = "unknown_resources")]
     UnknownResourceType { mime: Option<String> },
     #[error(
-        "{inner}{} {}",
+        "{inner}: `{}`{} {}",
+        original.pretty(),
         match replacement {
             Some(x) => format!(" {} `{}`", "->".yellow(), x.pretty()),
             None => "".to_owned(),
@@ -112,6 +113,7 @@ pub enum RuleError {
     Replace {
         #[serde(flatten)]
         inner: RuleReplaceError,
+        original: String,
         replacement: Option<String>,
         location: Range<usize>,
     },
@@ -121,38 +123,33 @@ pub enum RuleError {
 #[error(transparent)]
 #[serde(tag = "type")]
 pub enum RuleReplaceError {
-    #[error("Event handler: `{}`", original.pretty())]
+    #[error("Event handler")]
     #[serde(rename = "event_handlers")]
-    EventHandler { original: String },
-    #[error("Meta refresh: `{}`", original.pretty())]
+    EventHandler,
+    #[error("Meta refresh")]
     #[serde(rename = "meta_refresh")]
-    MetaRefresh { original: String },
-    #[error("Dangerous script: `{}`",
-        match original {
-            Some(x) => x.pretty(),
-            None => "<inline>".pretty()
-        },
-    )]
+    MetaRefresh,
+    #[error("Dangerous script")]
     #[serde(rename = "dangerous_scripts")]
-    DangerousScript { original: Option<String> },
-    #[error("Dangerous origin: `{}`", original.pretty())]
+    DangerousScript,
+    #[error("Dangerous origin")]
     #[serde(rename = "dangerous_origins")]
-    DangerousOrigin { original: String },
-    #[error("Dangerous domain: `{}`", original.pretty())]
+    DangerousOrigin,
+    #[error("Dangerous domain")]
     #[serde(rename = "dangerous_domain")]
-    DangerousDomain { original: Host },
-    #[error("Dangerous URI: `{}`", original.pretty())]
+    DangerousDomain,
+    #[error("Dangerous URI")]
     #[serde(rename = "dangerous_uris")]
-    DangerousUri { original: String },
-    #[error("Custom XML entity declaration (potential XML bomb): `{}`", original.pretty())]
+    DangerousUri,
+    #[error("Custom XML entity declaration (potential XML bomb)")]
     #[serde(rename = "xml_entity_declaration")]
-    XmlEntityDeclaration { original: String },
-    #[error("IDN host: `{}`", original.pretty())]
+    XmlEntityDeclaration,
+    #[error("IDN host")]
     #[serde(rename = "idn")]
-    Idn { original: String },
-    #[error("Dangerous JS construct: `{}`", original.pretty())]
+    Idn,
+    #[error("Dangerous JS construct")]
     #[serde(rename = "dangerous_js")]
-    DangerousJsConstruct { original: String },
+    DangerousJsConstruct,
 }
 
 /// An error that the sanitizer can produce

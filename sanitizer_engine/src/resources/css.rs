@@ -127,20 +127,14 @@ pub fn sanitize(
             let location = offset..offset + url.len();
 
             let processed = if is_dangerous_uri(clean) {
-                if let Some(replace) =
-                    policy
-                        .html
-                        .dangerous_uris
-                        .handle(url.clone(), location, logger)?
-                {
+                if let Some(replace) = policy.html.dangerous_uris.handle(&url, location, logger)? {
                     replace
                 } else {
                     url
                 }
             } else if let Ok(resolved_url) = base_url.join(clean) {
                 if detect_idn(&resolved_url).is_some()
-                    && let Some(replace) =
-                        policy.urls.idn.handle(url.to_owned(), location, logger)?
+                    && let Some(replace) = policy.urls.idn.handle(&url, location, logger)?
                 {
                     replace
                 } else {
