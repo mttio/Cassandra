@@ -11,25 +11,6 @@ use crate::{
 #[derive(Debug, PartialEq, Eq)]
 pub struct PolicyHost(pub Host);
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum AllowedScript {
-    Host(Host),
-    Sha(String),
-}
-
-impl FromStr for AllowedScript {
-    type Err = url::ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.starts_with("sha256-") {
-            Ok(Self::Sha(s.to_owned()))
-        } else {
-            Host::parse(s).map(Self::Host)
-        }
-    }
-}
-
 impl<'de> Deserialize<'de> for PolicyHost {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -51,6 +32,14 @@ impl Serialize for PolicyHost {
     }
 }
 
+impl FromStr for PolicyHost {
+    type Err = url::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Host::parse(s).map(Self)
+    }
+}
+
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct Policy {
@@ -64,8 +53,8 @@ pub struct Policy {
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct HtmlPolicy {
-    /// List of allowed script sources. A source can be a url domain or the `sha256` of an inline script
-    pub allow_scripts: Vec<AllowedScript>,
+    /// List of allowed script sources.
+    pub allow_scripts: Vec<PolicyHost>,
     /// List of allowed origins for content tags
     pub allow_origins: Vec<PolicyHost>,
     /// Handles event handler attributes

@@ -12,7 +12,7 @@ use crate::{
 };
 
 #[nutype(
-    derive(Debug, AsRef, Deref, Serialize, Deserialize, Default, PartialEq),
+    derive(Debug, Serialize, Deserialize, Default, PartialEq, Display, From),
     default = "/* Blocked by Web Sanitizer: dangerous keywords found */"
 )]
 pub(crate) struct JsReplace(String);
@@ -20,10 +20,6 @@ pub(crate) struct JsReplace(String);
 impl Replaceable for JsReplace {
     fn to_error() -> RuleReplaceError {
         RuleReplaceError::DangerousJsConstruct
-    }
-
-    fn to_replacement(&self) -> String {
-        self.as_ref().to_owned()
     }
 }
 
@@ -48,12 +44,9 @@ pub struct ReplaceRule<R> {
 }
 
 /// A trait used by rules to describe replacement inside files and error conversion
-pub trait Replaceable {
+pub trait Replaceable: ToString {
     /// Returns the associated `RuleReplaceError`
     fn to_error() -> RuleReplaceError;
-
-    /// Convert `self` to the replacement value
-    fn to_replacement(&self) -> String;
 }
 
 pub trait Verify2 {
@@ -103,7 +96,7 @@ impl<R: Default + Replaceable> ReplaceRule<R> {
                 location,
             })
         } else {
-            let replacement = self.replace.as_ref().map(R::to_replacement);
+            let replacement = self.replace.as_ref().map(R::to_string);
             logger.log(
                 self.level,
                 RuleError::Replace {
@@ -300,7 +293,7 @@ pub fn sanitize_attribute(s: &str) -> String {
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    derive(Debug, Default, Deserialize, Serialize, PartialEq, Display),
     sanitize(with = |x| sanitize_attribute(&x)),
     default = "#"
 )]
@@ -310,14 +303,10 @@ impl Replaceable for Idn {
     fn to_error() -> RuleReplaceError {
         RuleReplaceError::Idn
     }
-
-    fn to_replacement(&self) -> String {
-        self.as_ref().to_owned()
-    }
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    derive(Debug, Default, Deserialize, Serialize, PartialEq, Display),
     sanitize(with = |x| sanitize_attribute(&x)),
     default = ""
 )]
@@ -327,14 +316,10 @@ impl Replaceable for EventHandlers {
     fn to_error() -> RuleReplaceError {
         RuleReplaceError::EventHandler
     }
-
-    fn to_replacement(&self) -> String {
-        self.as_ref().to_owned()
-    }
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    derive(Debug, Default, Deserialize, Serialize, PartialEq, Display),
     default = "<!-- Blocked by Web Sanitizer: XML entity found -->"
 )]
 pub struct XmlEntities(String);
@@ -343,14 +328,10 @@ impl Replaceable for XmlEntities {
     fn to_error() -> RuleReplaceError {
         RuleReplaceError::XmlEntityDeclaration
     }
-
-    fn to_replacement(&self) -> String {
-        self.as_ref().to_owned()
-    }
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    derive(Debug, Default, Deserialize, Serialize, PartialEq, Display),
     default = ""
 )]
 pub struct MetaRefresh(String);
@@ -359,14 +340,10 @@ impl Replaceable for MetaRefresh {
     fn to_error() -> RuleReplaceError {
         RuleReplaceError::MetaRefresh
     }
-
-    fn to_replacement(&self) -> String {
-        self.as_ref().to_owned()
-    }
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    derive(Debug, Default, Deserialize, Serialize, PartialEq, Display),
     default = "#"
 )]
 pub struct DangerousUris(String);
@@ -374,10 +351,6 @@ pub struct DangerousUris(String);
 impl Replaceable for DangerousUris {
     fn to_error() -> RuleReplaceError {
         RuleReplaceError::DangerousUri
-    }
-
-    fn to_replacement(&self) -> String {
-        self.as_ref().to_owned()
     }
 }
 
@@ -399,7 +372,7 @@ impl Verify2 for DangerousDomain {
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    derive(Debug, Default, Deserialize, Serialize, PartialEq, Display),
     sanitize(with = |x| sanitize_attribute(&x)),
     default = "#"
 )]
@@ -409,14 +382,10 @@ impl Replaceable for DangerousDomain2 {
     fn to_error() -> RuleReplaceError {
         RuleReplaceError::DangerousDomain
     }
-
-    fn to_replacement(&self) -> String {
-        self.as_ref().to_owned()
-    }
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    derive(Debug, Default, Deserialize, Serialize, PartialEq, Display),
     sanitize(with = |x| sanitize_attribute(&x)),
     default = "#"
 )]
@@ -426,14 +395,10 @@ impl Replaceable for DangerousScripts {
     fn to_error() -> RuleReplaceError {
         RuleReplaceError::DangerousScript
     }
-
-    fn to_replacement(&self) -> String {
-        self.as_ref().to_owned()
-    }
 }
 
 #[nutype(
-    derive(Debug, Default, AsRef, Deserialize, Serialize, PartialEq),
+    derive(Debug, Default, Deserialize, Serialize, PartialEq, Display),
     sanitize(with = |x| sanitize_attribute(&x)),
     default = "#"
 )]
@@ -442,9 +407,5 @@ pub struct DangerousOrigins(String);
 impl Replaceable for DangerousOrigins {
     fn to_error() -> RuleReplaceError {
         RuleReplaceError::DangerousOrigin
-    }
-
-    fn to_replacement(&self) -> String {
-        self.as_ref().to_owned()
     }
 }

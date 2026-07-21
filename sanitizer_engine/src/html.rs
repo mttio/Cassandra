@@ -11,7 +11,7 @@ use url::Url;
 use crate::{
     errors::RuleError,
     log::Log,
-    policy::{AllowedScript, Policy},
+    policy::Policy,
     rules::sanitize_attribute,
     url::{detect_idn, host_matches, is_dangerous_uri},
 };
@@ -307,16 +307,15 @@ pub fn create_rewriter<'a, W: Write>(
                 if let Some(resolved) = handle_attribute(el, "src", &state.base, policy, logger)? {
                     if let Some(host) = resolved.host() {
                         let host = host.to_owned();
-                        if !policy.html.allow_scripts.iter().any(|allowed| {
-                            if let AllowedScript::Host(allowed) = allowed {
-                                host_matches(allowed, &host)
-                            } else {
-                                false
-                            }
-                        }) && let Some(replace) = policy
+                        if !policy
                             .html
-                            .dangerous_scripts
-                            .handle(host, location, logger)?
+                            .allow_scripts
+                            .iter()
+                            .any(|allowed| host_matches(&allowed.0, &host))
+                            && let Some(replace) = policy
+                                .html
+                                .dangerous_scripts
+                                .handle(host, location, logger)?
                         {
                             replace_attribute(&replace, "src", el);
                         }
@@ -409,9 +408,6 @@ pub fn create_rewriter<'a, W: Write>(
 
     let mut inline_script = None;
     handlers.push(text!("script", move |t| {
-        use base64::{Engine, prelude::BASE64_STANDARD};
-        use sha2::{Digest, Sha256};
-
         let (text, location) =
             inline_script.get_or_insert_with(|| (String::new(), t.source_location().bytes().start));
 
@@ -419,31 +415,12 @@ pub fn create_rewriter<'a, W: Write>(
         t.remove();
 
         if t.last_in_text_node() {
-            let mut hasher = Sha256::new();
-            hasher.update(text.as_bytes());
-            let hash_result = hasher.finalize();
-            let b64_hash = BASE64_STANDARD.encode(hash_result);
-            let csp_hash = format!("sha256-{}", b64_hash);
-
-            let start = *location;
-            let end = t.source_location().bytes().end;
-
-            if !policy.html.allow_scripts.iter().any(|allowed| {
-                if let AllowedScript::Sha(allowed) = allowed {
-                    csp_hash == *allowed
-                } else {
-                    false
-                }
-            }) && let Some(replace) =
-                policy
-                    .html
-                    .dangerous_scripts
-                    .handle(csp_hash, start..end, logger)?
-            {
-                t.replace(&replace, ContentType::Text);
-            } else {
-                t.replace(text, ContentType::Text);
-            }
+            let content = crate::resources::javascript::sanitize(
+                text,
+                &logger.inner_content(*location),
+                &policy.resources.dangerous_js,
+            )?;
+            t.replace(&content, ContentType::Text);
 
             inline_script = None;
         }
@@ -573,11 +550,7 @@ mod tests {
     #[test]
     fn test_script_inline_allowed() {
         let mut policy = Policy::default();
-        policy.html.allow_scripts = vec![
-            "sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI="
-                .parse()
-                .unwrap(),
-        ];
+        policy.resources.dangerous_js = ReplaceRule::keep(LogLevel::Warn);
 
         let input = b"<script>alert(1)</script>";
         let (_, output) = rewrite_html(input, &policy);
@@ -587,13 +560,13 @@ mod tests {
     #[test]
     fn test_script_inline_blocked() {
         let mut policy = Policy::default();
-        policy.html.dangerous_scripts = ReplaceRule::with_default(LogLevel::Warn);
+        policy.resources.dangerous_js = ReplaceRule::new("/* Blocked */", LogLevel::Warn);
 
         let input = b"<script>alert(1)</script>";
         let (_, output) = rewrite_html(input, &policy);
 
         let output = String::from_utf8(output).unwrap();
-        assert_eq!(output, "<script>#</script>");
+        assert_eq!(output, "<script>/* Blocked */</script>");
     }
 
     #[test]

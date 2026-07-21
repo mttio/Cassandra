@@ -5,6 +5,25 @@ pub mod pdf;
 pub mod xml;
 
 use url::Url;
+use winnow::{
+    Parser,
+    ascii::multispace0,
+    combinator::delimited,
+    error::ParserError,
+    stream::{AsChar, Stream, StreamIsPartial},
+};
+
+/// A combinator that takes a parser `inner` and produces a parser that also consumes both leading and
+/// trailing whitespace, returning the output of `inner`.
+// https://github.com/winnow-rs/winnow/discussions/563
+pub fn space_around<I, O, E>(parser: impl Parser<I, O, E>) -> impl Parser<I, O, E>
+where
+    I: StreamIsPartial + Stream,
+    E: ParserError<I>,
+    I::Token: AsChar + Clone,
+{
+    delimited(multispace0, parser, multispace0)
+}
 
 /// Helper to generate a unique local filename deterministic for a URL.
 ///
