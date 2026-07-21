@@ -7,6 +7,26 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::{Host, Url};
 
+// https://gist.github.com/dginev/f6da5e94335d545e0a7b
+fn truncate(mut input: String, maxsize: usize) -> (String, bool) {
+    let mut utf8_maxsize = input.len();
+    if utf8_maxsize >= maxsize {
+        {
+            let mut char_iter = input.char_indices();
+            while utf8_maxsize >= maxsize {
+                utf8_maxsize = match char_iter.next_back() {
+                    Some((index, _)) => index,
+                    _ => 0,
+                };
+            }
+        } // Extra {} wrap to limit the immutable borrow of char_indices()
+        input.truncate(utf8_maxsize);
+        (input, true)
+    } else {
+        (input, false)
+    }
+}
+
 fn format_range(range: &Range<usize>) -> String {
     format!(
         "@ {}..{}",
@@ -16,12 +36,18 @@ fn format_range(range: &Range<usize>) -> String {
 }
 
 trait Pretty {
-    fn pretty(&self) -> colored::ColoredString;
+    fn pretty(&self) -> String;
 }
 
 impl<T: ToString> Pretty for T {
-    fn pretty(&self) -> colored::ColoredString {
-        self.to_string().bright_cyan()
+    fn pretty(&self) -> String {
+        let (string, truncated) = truncate(self.to_string(), 128);
+
+        if truncated {
+            format!("{}{}", string.bright_cyan(), "...".bright_cyan().dimmed())
+        } else {
+            string.bright_cyan().to_string()
+        }
     }
 }
 
