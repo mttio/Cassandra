@@ -190,6 +190,7 @@ pub enum SanitizerError {
 pub enum SanitizerMessage {
     Error(SanitizerError),
     CrawlingSubresource { depth: usize, url: Url },
+    ResourceCompleted,
 }
 
 impl Display for SanitizerMessage {
@@ -200,10 +201,11 @@ impl Display for SanitizerMessage {
                 write!(
                     f,
                     "Crawling sub-resource (depth {}): {}",
-                    depth,
+                    depth.pretty(),
                     url.to_string().bright_blue()
                 )
             }
+            SanitizerMessage::ResourceCompleted => write!(f, "Resource completed!"),
         }
     }
 }
@@ -243,10 +245,4 @@ impl From<RuleError> for SanitizerError {
     fn from(value: RuleError) -> Self {
         Self::Rule(value)
     }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct SanitizationReport {
-    pub input: String,
-    pub actions: Vec<RuleError>,
 }

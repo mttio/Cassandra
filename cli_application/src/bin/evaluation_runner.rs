@@ -38,7 +38,7 @@ fn run_sanitization(
     sources: Vec<InputSource>,
     policy: Arc<Policy>,
     output_dir: PathBuf,
-) -> Result<(Vec<cassandra::errors::SanitizationReport>, f64, f64)> {
+) -> Result<(Vec<cassandra::log::SanitizationReport>, f64, f64)> {
     let (tx, rx) = std::sync::mpsc::channel();
     if output_dir.exists() {
         std::fs::remove_dir_all(&output_dir)?;
@@ -166,7 +166,7 @@ fn main() -> Result<()> {
         let mut actual_rules = Vec::new();
         if let Some(report) = reports.first() {
             for action in &report.actions {
-                actual_rules.push(get_rule_type(action).to_owned());
+                actual_rules.push(get_rule_type(&action.error).to_owned());
             }
         }
         actual_rules.sort();

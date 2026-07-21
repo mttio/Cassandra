@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
-use chrono::Local;
+use chrono::{DateTime, Local};
 use colored::Colorize;
 use itertools::Itertools;
 use parking_lot::Mutex;
@@ -200,6 +200,21 @@ impl Log for NullLogger {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SanitizationReport {
+    pub input: String,
+    pub start: DateTime<Local>,
+    pub end: Option<DateTime<Local>>,
+    pub actions: Vec<ErrorWithTimestamp>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ErrorWithTimestamp {
+    timestamp: DateTime<Local>,
+    #[serde(flatten)]
+    pub error: RuleError,
+}
+
 pub fn logging_thread(
     output: &Path,
     console_level: LogLevel,
@@ -208,11 +223,13 @@ pub fn logging_thread(
     max_subresources: usize,
     channel: Receiver<LoggerMessage>,
 ) -> (bool, f64, f64) {
-    use crate::errors::{SanitizationReport, SanitizerError};
+    use crate::errors::SanitizerError;
 
     struct Subresource {
         source: Option<InputSource>,
-        errors: Vec<RuleError>,
+        start: DateTime<Local>,
+        end: Option<DateTime<Local>>,
+        errors: Vec<ErrorWithTimestamp>,
     }
 
     struct Source {
@@ -228,6 +245,8 @@ pub fn logging_thread(
                 0,
                 Subresource {
                     source: Some(x.clone()),
+                    start: Local::now(),
+                    end: None,
                     errors: Vec::new(),
                 },
             )]),
@@ -249,12 +268,10 @@ pub fn logging_thread(
             .entry(msg.subresource)
             .or_insert_with(|| Subresource {
                 source: None,
+                start: Local::now(),
+                end: None,
                 errors: Vec::new(),
             });
-
-        if let SanitizerMessage::CrawlingSubresource { url, .. } = &msg.message {
-            subresource.source = Some(InputSource::Url(url.clone()));
-        }
 
         if msg.level == LogLevel::Error {
             has_errors = true;
@@ -305,11 +322,24 @@ pub fn logging_thread(
             source.log_lines.push(line);
         }
 
-        // Collect sanitization action events if the message contains one
-        if let SanitizerMessage::Error(SanitizerError::Rule(err)) = msg.message {
-            subresource.errors.push(err);
+        match msg.message {
+            SanitizerMessage::CrawlingSubresource { url, .. } => {
+                subresource.source = Some(InputSource::Url(url));
+            }
+            SanitizerMessage::ResourceCompleted => {
+                subresource.end = Some(Local::now());
+            }
+            SanitizerMessage::Error(SanitizerError::Rule(error)) => {
+                // Collect sanitization action events if the message contains one
+                subresource.errors.push(ErrorWithTimestamp {
+                    timestamp: Local::now(),
+                    error,
+                });
+            }
+            _ => (),
         }
     }
+
     let loop_elapsed = start_loop.elapsed().as_secs_f64();
 
     let start_write = std::time::Instant::now();
@@ -339,6 +369,8 @@ pub fn logging_thread(
 
                 SanitizationReport {
                     input: input_source_str,
+                    start: subresource.start,
+                    end: subresource.end,
                     actions: subresource.errors,
                 }
             })
@@ -420,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_sanitization_report_generation() {
-        use crate::errors::{RuleError, SanitizationReport};
+        use crate::errors::RuleError;
         use std::path::PathBuf;
 
         let err = RuleError::Replace {
@@ -465,8 +497,11 @@ mod tests {
         assert_eq!(report.actions.len(), 1);
         assert!(matches!(
             report.actions[0],
-            RuleError::Replace {
-                inner: RuleReplaceError::DangerousScript,
+            ErrorWithTimestamp {
+                error: RuleError::Replace {
+                    inner: RuleReplaceError::DangerousScript,
+                    ..
+                },
                 ..
             }
         ));

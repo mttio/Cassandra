@@ -10,7 +10,7 @@ use tokio::runtime::Runtime;
 
 use crate::{
     crawl_session::CrawlSession,
-    errors::SanitizerError,
+    errors::{SanitizerError, SanitizerMessage},
     http_client::SanitizerHttpClient,
     log::{ChannelLogger, Log, LoggerMessage},
     policy::Policy,
@@ -81,6 +81,8 @@ pub fn library(
             InputSource::Url(url) => runtime.spawn(async move {
                 if let Err(e) = session.process_url(url).await {
                     session.logger.error(e);
+                } else {
+                    session.logger.info(SanitizerMessage::ResourceCompleted);
                 }
             }),
             InputSource::File(path) => runtime.spawn(lazy(move |_| session.process_file(path))),

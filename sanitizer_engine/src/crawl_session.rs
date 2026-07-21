@@ -193,6 +193,8 @@ impl CrawlSession {
                 .await
             {
                 logger.error(e);
+            } else {
+                logger.info(SanitizerMessage::ResourceCompleted);
             }
         });
     }
@@ -213,6 +215,8 @@ impl CrawlSession {
 
         if let Err(e) = result {
             self.logger.error(e);
+        } else {
+            self.logger.info(SanitizerMessage::ResourceCompleted);
         }
     }
 

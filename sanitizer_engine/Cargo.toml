@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.22.1"
-chrono = "0.4.44"
+chrono = { version = "0.4.44", features = ["serde"] }
 colored = "3.1.1"
 futures-util = "0.3"
 hickory-resolver = { version = "0.26.1", features = ["tokio"] }
