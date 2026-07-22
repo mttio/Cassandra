@@ -68,7 +68,7 @@ pub struct HtmlPolicy {
     /// Handles dangerous origins in `<iframe>` and `<object>` tags
     pub dangerous_origins: ReplaceRule<rules::DangerousOrigins>,
     /// Handles dangerous domains (see `urls.dangerous_domains`)
-    pub dangerous_domain: ReplaceRule<rules::DangerousDomain2>,
+    pub dangerous_domains: ReplaceRule<rules::DangerousDomains>,
     /// Handles dangerous URIs (`javascript:...`, `data:...`) in tag attributes
     pub dangerous_uris: ReplaceRule<rules::DangerousUris>,
 }
@@ -87,7 +87,7 @@ impl Default for HtmlPolicy {
             meta_refresh: ReplaceRule::with_default(LogLevel::Warn),
             dangerous_scripts: ReplaceRule::with_default(LogLevel::Error),
             dangerous_origins: ReplaceRule::with_default(LogLevel::Error),
-            dangerous_domain: ReplaceRule::with_default(LogLevel::Error),
+            dangerous_domains: ReplaceRule::with_default(LogLevel::Error),
             dangerous_uris: ReplaceRule::with_default(LogLevel::Info),
         }
     }
@@ -126,10 +126,10 @@ impl Default for UrlsPolicy {
 pub struct ResourcesPolicy {
     /// Whether to fetch subresources references in processed files
     pub fetch_sub_resources: bool,
-    /// Maximum subresource depth
-    pub max_depth: RuleWithValue<rules::MaxSubresourceDepth>,
     /// Maximum subresource amount
-    pub max_requests: RuleWithValue<rules::MaxSubresources>,
+    pub max_subresources: RuleWithValue<rules::MaxSubresources>,
+    /// Maximum subresource depth
+    pub max_resource_depth: RuleWithValue<rules::MaxResourceDepth>,
     /// Maximum resource length
     pub max_bytes: RuleWithValue<rules::MaxBytes>,
     /// Handles mismatches MIME types
@@ -139,15 +139,15 @@ pub struct ResourcesPolicy {
     /// Handles active content in PDF files
     pub pdf_active_content: LogLevel,
     /// Handles dangerous constructs in JS files
-    pub dangerous_js: ReplaceRule<rules::JsReplace>,
+    pub dangerous_js: ReplaceRule<rules::DangerousJs>,
 }
 
 impl Default for ResourcesPolicy {
     fn default() -> Self {
         Self {
             fetch_sub_resources: true,
-            max_depth: RuleWithValue::with_default(LogLevel::Error),
-            max_requests: RuleWithValue::with_default(LogLevel::Error),
+            max_subresources: RuleWithValue::with_default(LogLevel::Error),
+            max_resource_depth: RuleWithValue::with_default(LogLevel::Error),
             max_bytes: RuleWithValue::with_default(LogLevel::Error),
             mismatched_mime: LogLevel::Error,
             unknown_resource: LogLevel::Error,
@@ -172,7 +172,7 @@ pub struct ConnectionsPolicy {
     /// User agent to include in every request
     pub user_agent: String,
     /// Handles connections to dangerous domain (see `urls.dangerous_domains`)
-    pub dangerous_domain: RuleWithValue<rules::DangerousDomain>,
+    pub dangerous_connection: RuleWithValue<rules::DangerousConnection>,
 }
 
 impl Default for ConnectionsPolicy {
@@ -182,7 +182,7 @@ impl Default for ConnectionsPolicy {
             overall_timeout: Duration::from_secs(15),
             max_redirects: RuleWithValue::with_default(LogLevel::Error),
             user_agent: format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
-            dangerous_domain: RuleWithValue::with_default(LogLevel::Error),
+            dangerous_connection: RuleWithValue::with_default(LogLevel::Error),
         }
     }
 }

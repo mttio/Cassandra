@@ -62,7 +62,7 @@ fn run_sanitization(
         cassandra::log::LogLevel::Error, // Console logging level
         cassandra::log::LogLevel::Trace, // File logging level
         &sources,
-        *policy.resources.max_requests.value.as_ref(),
+        *policy.resources.max_subresources.value.as_ref(),
         rx,
     );
 
@@ -299,7 +299,7 @@ fn main() -> Result<()> {
         for fetch_sub in &[false, true] {
             let mut policy = Policy::default();
             policy.resources.fetch_sub_resources = *fetch_sub;
-            policy.resources.max_requests =
+            policy.resources.max_subresources =
                 serde_json::from_str("{\"value\": 100, \"level\": \"error\"}").unwrap();
             policy.resources.max_bytes =
                 serde_json::from_str("{\"value\": 52428800, \"level\": \"error\"}").unwrap();

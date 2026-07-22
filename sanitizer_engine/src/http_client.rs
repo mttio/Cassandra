@@ -170,7 +170,7 @@ impl SanitizerHttpClient {
             timeout: policy.connections.connection_timeout,
         };
 
-        let dangerous_domain_action = policy.connections.dangerous_domain;
+        let dangerous_domain_action = policy.connections.dangerous_connection;
         let client = Client::builder()
             // Set custom Ip resolver
             .dns_resolver(Arc::new(ssrf_safe_resolver))

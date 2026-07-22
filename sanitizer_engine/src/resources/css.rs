@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn test_sanitize() {
         let mut policy = Policy::default();
-        policy.html.dangerous_domain = ReplaceRule::with_default(LogLevel::Warn);
+        policy.html.dangerous_domains = ReplaceRule::with_default(LogLevel::Warn);
 
         let base_url = Url::parse("https://example.com/dir/style.css").unwrap();
         let css = "body { background: url('img.png'); } @import 'common.css';";
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn test_sanitize_dangerous_uris() {
         let mut policy = Policy::default();
-        policy.html.dangerous_domain = ReplaceRule::with_default(LogLevel::Warn);
+        policy.html.dangerous_domains = ReplaceRule::with_default(LogLevel::Warn);
 
         let base_url = Url::parse("https://example.com/style.css").unwrap();
         let css = "\

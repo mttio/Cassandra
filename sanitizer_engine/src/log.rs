@@ -387,7 +387,7 @@ pub fn logging_thread(
 mod tests {
     use super::*;
     use crate::crawl_session::CrawlSession;
-    use crate::errors::{RuleReplaceError, SanitizerError};
+    use crate::errors::{ReplacementKind, SanitizerError};
     use crate::http_client::SanitizerHttpClient;
     use crate::policy::Policy;
     use parking_lot::Mutex;
@@ -438,7 +438,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(SanitizerError::Rule(RuleError::Replace {
-                inner: RuleReplaceError::XmlEntityDeclaration,
+                inner: ReplacementKind::XmlEntityDeclaration,
                 ..
             }))
         ));
@@ -450,7 +450,7 @@ mod tests {
         use std::path::PathBuf;
 
         let err = RuleError::Replace {
-            inner: RuleReplaceError::DangerousScript,
+            inner: ReplacementKind::DangerousScript,
             original: "evil_script()".to_owned(),
             replacement: None,
             location: 10..20,
@@ -493,7 +493,7 @@ mod tests {
             report.actions[0],
             ErrorWithTimestamp {
                 error: RuleError::Replace {
-                    inner: RuleReplaceError::DangerousScript,
+                    inner: ReplacementKind::DangerousScript,
                     ..
                 },
                 ..

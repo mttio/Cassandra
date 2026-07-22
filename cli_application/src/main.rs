@@ -264,7 +264,7 @@ pub fn run(args: Args) -> Result<bool> {
                 logging_level,
                 LogLevel::Trace,
                 &sources,
-                *policy.resources.max_requests.value.as_ref(),
+                *policy.resources.max_subresources.value.as_ref(),
                 rx,
             );
             if has_errors {

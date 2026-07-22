@@ -12,7 +12,7 @@ use winnow::{
 use crate::{
     errors::SanitizerError,
     log::Log,
-    rules::{JsReplace, ReplaceRule},
+    rules::{DangerousJs, ReplaceRule},
 };
 
 /// Scans JS file for dangerous constructs (eval, document.write).
@@ -25,7 +25,7 @@ use crate::{
 pub fn sanitize<'a>(
     input: &'a str,
     logger: &impl Log,
-    rule: &ReplaceRule<JsReplace>,
+    rule: &ReplaceRule<DangerousJs>,
 ) -> Result<Cow<'a, str>, SanitizerError> {
     let mut content = LocatingSlice::new(input);
 
@@ -77,13 +77,13 @@ pub fn sanitize<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::log::NullLogger;
+    use crate::log::{LogLevel, NullLogger};
 
     use super::*;
 
     #[test]
     fn test_sanitize() {
-        let rule = ReplaceRule::forbid();
+        let rule = ReplaceRule::with_default(LogLevel::Error);
         let logger = NullLogger;
 
         assert!(sanitize("console.log('hello');", &logger, &rule).is_ok());
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_spaces() {
-        let rule = ReplaceRule::forbid();
+        let rule = ReplaceRule::with_default(LogLevel::Error);
         let logger = NullLogger;
 
         assert!(sanitize("eval    (  '1+1'  ) eval()", &logger, &rule).is_err());

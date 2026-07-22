@@ -57,12 +57,13 @@ impl<T: ToString> Pretty for T {
     }
 }
 
+/// An error type containing all possible policy rule violations
 #[derive(Debug, Clone, Error, Deserialize, Serialize, PartialEq)]
 #[error(transparent)]
 #[serde(tag = "type")]
 pub enum RuleError {
     #[error("Too many redirects (max = {})", max.pretty())]
-    #[serde(rename = "too_many_redirects")]
+    #[serde(rename = "max_redirects")]
     TooManyRedirects { max: usize },
     #[error(
         "Connecting to IDN host: `{}` {} `{}`",
@@ -73,29 +74,29 @@ pub enum RuleError {
     #[serde(rename = "idn_connection")]
     IdnConnection { original: String, converted: String },
     #[error("Connecting to dangerous domain ({})", original.pretty())]
-    #[serde(rename = "dangerous_domain_connection")]
+    #[serde(rename = "dangerous_connection")]
     DangerousDomainConnection { original: Host },
     #[error(
         "MIME mismatch (expected = {}, actual = {})",
         expected.as_deref().unwrap_or("<none>").pretty(),
         actual.as_deref().unwrap_or("<none>").pretty(),
     )]
-    #[serde(rename = "mime_mismatch")]
+    #[serde(rename = "mismatched_mime")]
     MimeMismatch {
         expected: Option<String>,
         actual: Option<String>,
     },
     #[error("Response body exceeds maximum size ({} bytes)", max.pretty())]
-    #[serde(rename = "content_too_long")]
+    #[serde(rename = "max_bytes")]
     ContentTooLong { max: usize },
     #[error("Sub-resource amount limit reached: max_requests = {}", max.pretty())]
-    #[serde(rename = "too_many_subresources")]
+    #[serde(rename = "max_subresources")]
     MaxSubresources { max: usize },
     #[error("Sub-resource depth limit reached: max_requests = {}", max.pretty())]
-    #[serde(rename = "subresources_too_deep")]
+    #[serde(rename = "max_resource_depth")]
     MaxSubresourceDepth { max: usize },
     #[error("Pdf active content: `{}` {}", original.pretty(), format_range(location))]
-    #[serde(rename = "active_content")]
+    #[serde(rename = "pdf_active_content")]
     PdfActiveContent {
         original: String,
         location: Range<usize>,
@@ -104,7 +105,7 @@ pub enum RuleError {
         Some(x) => x.pretty(),
         None => "<none>".pretty(),
     })]
-    #[serde(rename = "unknown_resources")]
+    #[serde(rename = "unknown_resource")]
     UnknownResourceType { mime: Option<String> },
     #[error(
         "{inner}: `{}`{} {}",
@@ -118,7 +119,7 @@ pub enum RuleError {
     #[serde(untagged)]
     Replace {
         #[serde(flatten)]
-        inner: RuleReplaceError,
+        inner: ReplacementKind,
         original: String,
         replacement: Option<String>,
         location: Range<usize>,
@@ -128,7 +129,7 @@ pub enum RuleError {
 #[derive(Debug, Clone, Error, Deserialize, Serialize, PartialEq)]
 #[error(transparent)]
 #[serde(tag = "type")]
-pub enum RuleReplaceError {
+pub enum ReplacementKind {
     #[error("Event handler")]
     #[serde(rename = "event_handlers")]
     EventHandler,
@@ -142,13 +143,13 @@ pub enum RuleReplaceError {
     #[serde(rename = "dangerous_origins")]
     DangerousOrigin,
     #[error("Dangerous domain")]
-    #[serde(rename = "dangerous_domain")]
+    #[serde(rename = "dangerous_domains")]
     DangerousDomain,
     #[error("Dangerous URI")]
     #[serde(rename = "dangerous_uris")]
     DangerousUri,
     #[error("Custom XML entity declaration (potential XML bomb)")]
-    #[serde(rename = "xml_entity_declaration")]
+    #[serde(rename = "xml_entities")]
     XmlEntityDeclaration,
     #[error("IDN host")]
     #[serde(rename = "idn")]

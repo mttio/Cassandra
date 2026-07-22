@@ -41,7 +41,7 @@ dangerous_scripts = "error"
 # Handles dangerous origins in `<iframe>` and `<object>` tags. *Replaceable*
 dangerous_origins = "error"
 # Handles dangerous domains (see `urls.dangerous_domains`). *Replaceable*
-dangerous_domain = "error"
+dangerous_domains = "error"
 # Handles dangerous URIs (`javascript:...`, `data:...`) in tag attributes. *Replaceable*
 dangerous_uris = { level = "info", replace = "#" }
 
@@ -59,10 +59,10 @@ idn_connection = "warn"
 [resources]
 # Whether to fetch subresources references in processed files
 fetch_sub_resources = true
-# Maximum subresource depth
-max_depth = { value = 1, level = "error" }
 # Maximum subresource amount
-max_requests = { value = 5, level = "error" }
+max_subresources = { value = 5, level = "error" }
+# Maximum subresource depth
+max_resource_depth = { value = 1, level = "error" }
 # Maximum resource length
 max_bytes = { value = 1048576, level = "error" }
 # Handles mismatches MIME types
@@ -85,4 +85,4 @@ max_redirects = { value = 2, level = "error" }
 # User agent to include in every request
 user_agent = "cassandra/0.1.0"
 # Handles connections to dangerous domain (see `urls.dangerous_domains`)
-dangerous_domain = "error"
+dangerous_connection = "error"

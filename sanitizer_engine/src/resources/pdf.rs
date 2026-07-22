@@ -162,7 +162,7 @@ mod tests {
         assert!(sanitize(&malicious_file_data, &logger, rule).is_err());
 
         let mut policy = Policy::default();
-        policy.html.dangerous_domain = ReplaceRule::with_default(LogLevel::Warn);
+        policy.html.dangerous_domains = ReplaceRule::with_default(LogLevel::Warn);
 
         // CSS and JS disk file validation checks
         let css_file_data =
@@ -182,7 +182,7 @@ mod tests {
             crate::resources::javascript::sanitize(
                 &js_file_data,
                 &NullLogger,
-                &ReplaceRule::forbid()
+                &ReplaceRule::with_default(LogLevel::Error),
             )
             .is_err()
         );

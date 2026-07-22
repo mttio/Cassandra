@@ -173,7 +173,7 @@ impl CrawlSession {
 
     /// Checks limits and registers a sub-resource URL, then enqueues it if valid and not visited.
     fn try_enqueue_subresource(self: &Arc<Self>, url: Url, local_name: String, depth: usize) {
-        let max_requests = &self.policy.resources.max_requests;
+        let max_requests = &self.policy.resources.max_subresources;
         let logger = {
             let mut visited = self.url_map.lock();
             if visited.contains_key(&url) {
@@ -194,7 +194,12 @@ impl CrawlSession {
             self.logger.subresource(*total_requests)
         };
 
-        if let Err(e) = self.policy.resources.max_depth.check(depth, &self.logger) {
+        if let Err(e) = self
+            .policy
+            .resources
+            .max_resource_depth
+            .check(depth, &self.logger)
+        {
             logger.error(e);
             return;
         }
@@ -389,7 +394,7 @@ impl CrawlSession {
         if let Some(host) = url.host().map(|x| x.to_owned()) {
             self.policy
                 .connections
-                .dangerous_domain
+                .dangerous_connection
                 .check((&host, &self.policy.urls.dangerous_domains), &self.logger)?;
         }
 

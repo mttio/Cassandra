@@ -48,7 +48,7 @@ fn sanitize_url(
                 .any(|x| host_matches(&host, &x.0))
                 && let Some(x) = policy
                     .html
-                    .dangerous_domain
+                    .dangerous_domains
                     .handle(host, location, logger)?
             {
                 let new = match url.set_host(Some(x.as_ref())) {
@@ -503,7 +503,7 @@ mod tests {
     use super::*;
     use crate::{
         log::{LogLevel, NullLogger},
-        rules::{self, DangerousDomain2, ReplaceRule},
+        rules::{self, DangerousDomains, ReplaceRule},
     };
 
     fn rewrite_html(input: &[u8], policy: &Policy) -> (CrawlerState, Vec<u8>) {
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn test_flexible_action_handling_deny_remove() {
         let mut policy = Policy::default();
-        policy.html.dangerous_domain = ReplaceRule::new(DangerousDomain2::new(""), LogLevel::Warn);
+        policy.html.dangerous_domains = ReplaceRule::new(DangerousDomains::new(""), LogLevel::Warn);
         // allow_origins contains trusted.com
 
         let input = b"<div>\
