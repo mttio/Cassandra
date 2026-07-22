@@ -41,8 +41,8 @@ L'architettura funzionale di Cassandra è guidata dalla necessità di difendere 
    - **Espansione di Entità XML/HTML**: Blocco delle dichiarazioni di entità XML personalizzate (es. i riferimenti ricorsivi di tipo `<!ENTITY lol "lol">`) per difendersi dagli attacchi DoS di espansione.
    - **Dimensioni delle Immagini ed Esaurimento Risorse**: Filtro su asset di dimensioni eccessive o risorse potenzialmente infinite.
 
-6. **Server-Side Request Forgery (SSRF)**:
-   - Durante il recupero delle risorse remote, blocco dell'accesso a indirizzi di loopback (`127.0.0.0/8`, `::1`), subnet private (`10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`), spazi link-local, indirizzi multicast e intervalli CGNAT (Carrier-Grade NAT) per evitare che Cassandra venga usato per effettuare scansioni di reti interne.
+6. **Server-Side Request Forgery (SSRF) e DNS Rebinding**:
+   - Durante il recupero delle risorse remote, blocco dell'accesso a indirizzi di loopback (`127.0.0.0/8`, `::1`), subnet private (`10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`), spazi link-local, indirizzi multicast e intervalli CGNAT (Carrier-Grade NAT) per evitare che Cassandra venga usato per effettuare scansioni di reti interne. Inoltre, l'integrazione di un resolver DNS personalizzato direttamente nel livello di connessione del client HTTP (`SsrfSafeDnsResolver`) garantisce la verifica atomica degli IP al momento dell'apertura del socket TCP, prevenendo gli attacchi di DNS Rebinding.
 
 **Reportistica Strutturata e Configurazione CLI**:
 Cassandra scrive un file consolidato `cassandra.log` e un singolo report strutturato `report.json` in cui viene verificata ogni azione (regole attivate, offset dei byte, valori originali e modifiche) per ciascun input.
@@ -124,7 +124,7 @@ cassandra/ (Workspace Root)
 
 *   **L'Orchestrator (`lib.rs`)**: Inizializza una mappa globale thread-safe delle URL visitate (`url_map` protetta da `Arc<Mutex<HashMap<Url, usize>>>`) e istanzia il client HTTP safe. Itera sulle sorgenti di input, costruisce le istanze di `CrawlSession` e le pianifica sull'esecutore asincrono di Tokio.
 *   **La Crawl Session (`crawl_session.rs`)**: Gestisce l'elaborazione dei singoli file e il crawling delle URL. Tiene traccia delle limitazioni delle risorse (`total_requests`, `total_bytes`) per sessione utilizzando contatori locali protetti da mutex e genera asincronamente nuove richieste per le risorse identificate (es. fogli di stile, script) fino alla profondità massima `max_depth`.
-*   **Il Client HTTP Safe (`http_client.rs`)**: Intercetta le richieste in uscita, risolve i nomi DNS e filtra i blocchi IP privati, loopback e CGNAT. Limita la comunicazione alle connessioni HTTPS e analizza i magic numbers dei corpi delle risposte.
+*   **Il Client HTTP Safe (`http_client.rs`)**: Intercetta le richieste in uscita e applica un resolver DNS personalizzato (`SsrfSafeDnsResolver`) integrato direttamente in `reqwest`, eseguendo la validazione IP al momento dell'apertura del socket TCP. Questo approccio previene attacchi TOCTOU e DNS Rebinding, filtrando indirizzi IP privati, loopback e CGNAT per ogni connessione e reindirizzamento. Limita la comunicazione alle sole connessioni HTTPS e analizza i magic numbers dei corpi delle risposte.
 *   **Parser HTML in Flusso (`html.rs`)**: Integra `lol_html`. Legge i file HTML in piccoli chunk, applicando riscrittori basati su selettori CSS per intercettare elementi critici (es. `<script>`, `<iframe>`, `<a>`) e modificarne le proprietà al volo senza allocare memoria superflua.
 *   **Il Logger Consolidato (`log.rs`)**: I worker inviano log di avanzamento ed errori di regola (`RuleError`) tramite un canale `mpsc`. Un thread in background dedicato legge dal canale, stampando il progresso sulla riga di comando. Genera poi il file `cassandra.log` e produce il report strutturato finale `report.json`. 
 
@@ -230,11 +230,19 @@ pub enum RuleError {
 }
 ```
 
-*   **Mappatura delle Azioni di Policy**: Con la convalida di una regola fallisce, viene generato un `RuleError`. Il motore esamina l'azione configurata nella policy (Ignore, Warn, Replace, Error/Deny) ed esegue la mappatura corrispondente:
-    - `Ignore`: Ignora l'errore procedendo normalmente.
-    - `Warn`: Invia un log di avviso sul canale e mantiene il contenuto originale.
-    - `Replace`: Sostituisce l'attributo con un valore segnaposto sicuro (es. `src="blocked:url"`) e registra la modifica.
-    - `Error`: Rimuove l'attributo o il tag intero, registra il blocco e incrementa il contatore di errori complessivo, portando la CLI a restituire un codice di uscita non zero alla chiusura.
+*   **Mappatura delle Azioni di Policy**: 
+Le regole hanno un livello di gravità associato:
+- `ignore`
+- `trace`
+- `info`
+- `warn`
+- `error`
+
+Quando il programma identifica la violazione di una regola:
+Se la violazione è qualsiasi cosa che non sia `ignore`, la violazione è scritta sul log. Altrimenti se il livello è un `error`, il programma smette di processare la risorsa.
+
+Alcune regole possono essere configurate con un messaggio di replacement customizzabile.
+
 
 ```rust
 // log.rs - Convalida degli errori e gestione delle azioni di policy
@@ -363,8 +371,7 @@ Durante l'intera suite di valutazione sperimentale, l'occupazione massima della 
 #### Analisi dell'Efficienza Zero-Copy:
 Il ridottissimo consumo di memoria è conseguenza diretta dell'approccio zero-copy:
 1. **Token in Flusso**: `lol_html` evita di allocare un DOM in memoria, garantendo un footprint costante.
-2. **Riutilizzo dei Buffer**: I buffer vengono riciclati tra i vari stage riducendo le allocazioni sull'heap.
-3. **Condivisione tramite Riferimenti**: Elementi pesanti (come i dizionari di domini sospetti) sono condivisi tra i thread tramite riferimenti atomici `Arc<T>` senza alcuna duplicazione di dati.
+2. **Condivisione tramite Riferimenti**: Elementi pesanti (come i dizionari di domini processati e la configurazione del sanitizer) sono condivisi tra i thread tramite riferimenti atomici `Arc<T>` senza alcuna duplicazione di dati.
 
 ---
 
@@ -376,9 +383,7 @@ Il ridottissimo consumo di memoria è conseguenza diretta dell'approccio zero-co
    Cassandra si basa esclusivamente su controlli statici delle stringhe e blacklist. Non è in grado di rilevare minacce generate dinamicamente a runtime tramite offuscamenti Javascript complessi (es. uso di `eval` dinamici o concatenazione di stringhe).
 2. **Collo di Bottiglia sul Logging Sequenziale**:
    La serializzazione del report JSON finale tramite `serde_json::to_writer_pretty` viene eseguita in modalità sincrona e monothread, rappresentando un evidente limite prestazionale sui sistemi con molti core ed elevata concorrenza.
-3. **Possibili attacchi DNS Rebind**:
-   Nonostante il modulo anti-SSRF effettui la risoluzione IP per verificare la destinazione, non memorizza in cache l'indirizzo IP validato per l'intera durata della richiesta di download. Questa assenza potrebbe consentire attacchi DNS rebinding se l'IP del dominio di destinazione cambia tra il controllo e la connessione reale.
-4. **Limiti di Memoria sulle Risorse Scaricate**:
+3. **Limiti di Memoria sulle Risorse Scaricate**:
    Sebbene `total_bytes` prevenga download infiniti complessivi, i singoli asset remoti vengono completamente scaricati in memoria prima di essere sniffati e sanitizzati. In caso di molteplici download concorrenti ad alta velocità, la memoria heap potrebbe subire una temporanea saturazione.
 
 ### 5.2 Possibili Estensioni Future
@@ -387,14 +392,12 @@ Il ridottissimo consumo di memoria è conseguenza diretta dell'approccio zero-co
    Sostituzione dell'attuale serializzazione finale sincrona con un serializzatore JSON asincrono e in flusso (es. scrittura incrementale degli eventi man mano che avvengono) per rimuovere il collo di bottiglia del thread di log.
 2. **Sandboxing Javascript via WebAssembly**:
    Integrazione di un interprete Javascript super-leggero all'interno di una sandbox WebAssembly (es. tramite `wasmtime`) per valutare gli script a runtime in sicurezza ed estrapolare minacce offuscate.
-3. **Binding Fisico del Socket Anti-SSRF**:
-   Miglioramento del client HTTP in modo da forzare il socket a connettersi unicamente all'indirizzo IP risolto e convalidato all'inizio, eliminando alla radice gli attacchi di rebind DNS.
-4. **Ricaricamento a Caldo delle Policy**:
+3. **Ricaricamento a Caldo delle Policy**:
    Utilizzo di librerie di monitoraggio del filesystem (es. il crate `notify`) per aggiornare le definizioni delle regole TOML in tempo reale senza dover interrompere e riavviare Cassandra.
-5. **Migliore posizionamento nei file**:
+4. **Migliore posizionamento nei file**:
    Gli errori che fanno riferimento al contenuto dei file usano un range di offset. Usare coppie righe/colonne sarebbe migliore, ma `lol_html` supporta solo offset (https://github.com/cloudflare/lol-html/issues/157).
-6. **Streamed parsing per altre risorse**:
+5. **Streamed parsing per altre risorse**:
    Solo i file html vengono letti in streaming, le altre risorse vengono prima lette completamente e poi sanitizzate.
    Non ci sono librerie simili a `lol_html` per altri linguaggi, ma si potrebbe utilizzare `winnow::stream`.
-7. **Supporto per altri tipi di risorse**:
+6. **Supporto per altri tipi di risorse**:
    Per esempio, il programma non supporta i file `svg`.
