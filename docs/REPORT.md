@@ -170,6 +170,8 @@ Il crate di libreria (`sanitizer_engine`) espone un'interfaccia pubblica che per
 *   **`RuleWithValue<T>` e `ReplaceRule<T>`**: Esposte nel modulo `rules`, permettono di associare livelli di log personalizzati alle limitazioni numeriche (es. `MaxBytes` o `MaxSubresources`) e alle azioni di sostituzione.
 *   **Sanitizzatori Specifici (`resources/`)**: La libreria espone funzioni di utilità riutilizzabili per manipolazioni mirate, tra cui `strip_jpeg_metadata` / `strip_png_metadata` per la rimozione EXIF, ed `EntityScanner` per il rilevamento incrementale di entità XML sospette.
 
+### 2.3 Patch alla libreria url
+Per quanto riguarda la libreria url la versione originale è stata modificata in modo che fosse tenuta traccia dell'url originale in caso di sostituzione di caratteri IDN. In questo modo, anche dopo la sostituzione, è possibile scrivere a log il valore originario.
 
 ---
 
