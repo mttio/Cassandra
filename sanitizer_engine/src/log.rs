@@ -435,13 +435,13 @@ mod tests {
         let _ = fs::remove_file(file_path);
 
         // Retrieve the logged error
-        std::assert_matches!(
+        assert!(matches!(
             result,
             Err(SanitizerError::Rule(RuleError::Replace {
                 inner: RuleReplaceError::XmlEntityDeclaration,
                 ..
             }))
-        );
+        ));
     }
 
     #[test]

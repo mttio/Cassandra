@@ -106,7 +106,7 @@ impl XmlReader {
 #[cfg(test)]
 mod tests {
     use crate::log::NullLogger;
-    use std::{assert_matches, ops::Range};
+    use std::ops::Range;
 
     use super::*;
 
@@ -124,58 +124,58 @@ mod tests {
             scanner.next_chunk(b"<!DOCTYPE html>", &policy, &logger),
             Ok(b"<!DOCTYPE html>".to_vec())
         );
-        assert_matches!(
+        assert!(matches!(
             scanner.next_chunk(b"<!ENTITY x 'y'>", &policy, &logger),
             Err(RuleError::Replace {
                 location: Range { start: 27, end: 42 },
                 ..
             })
-        );
+        ));
 
         // Case insensitivity
         let mut reader = XmlReader::new(0);
-        assert_matches!(
+        assert!(matches!(
             reader.next_chunk(b"<!entity lol 'lol'>", &policy, &logger),
             Err(RuleError::Replace {
                 location: Range { start: 0, end: 19 },
                 ..
             })
-        );
+        ));
 
         // // Boundary split
         let mut reader = XmlReader::new(0);
-        assert_matches!(reader.next_chunk(b"abc<!ENT", &policy, &logger), Ok(_));
-        assert_matches!(reader.next_chunk(b"ITY def", &policy, &logger), Ok(_));
-        assert_matches!(
+        assert!(matches!(reader.next_chunk(b"abc<!ENT", &policy, &logger), Ok(_)));
+        assert!(matches!(reader.next_chunk(b"ITY def", &policy, &logger), Ok(_)));
+        assert!(matches!(
             reader.next_chunk(b">", &policy, &logger),
             Err(RuleError::Replace {
                 location: Range { start: 3, end: 16 },
                 ..
             })
-        );
+        ));
 
         // Overlapping match
         let mut reader = XmlReader::new(0);
-        assert_matches!(reader.next_chunk(b"<!<!ENT", &policy, &logger), Ok(_));
-        assert_matches!(reader.next_chunk(b"ITY", &policy, &logger), Ok(_));
-        assert_matches!(
+        assert!(matches!(reader.next_chunk(b"<!<!ENT", &policy, &logger), Ok(_)));
+        assert!(matches!(reader.next_chunk(b"ITY", &policy, &logger), Ok(_)));
+        assert!(matches!(
             reader.next_chunk(b">", &policy, &logger),
             Err(RuleError::Replace {
                 location: Range { start: 2, end: 11 },
                 ..
             })
-        );
+        ));
 
         // Another overlap match
         let mut reader = XmlReader::new(0);
-        assert_matches!(reader.next_chunk(b"<!EN<!ENT", &policy, &logger), Ok(_));
-        assert_matches!(reader.next_chunk(b"ITY", &policy, &logger), Ok(_));
-        assert_matches!(
+        assert!(matches!(reader.next_chunk(b"<!EN<!ENT", &policy, &logger), Ok(_)));
+        assert!(matches!(reader.next_chunk(b"ITY", &policy, &logger), Ok(_)));
+        assert!(matches!(
             reader.next_chunk(b">", &policy, &logger),
             Err(RuleError::Replace {
                 location: Range { start: 4, end: 13 },
                 ..
             })
-        );
+        ));
     }
 }
