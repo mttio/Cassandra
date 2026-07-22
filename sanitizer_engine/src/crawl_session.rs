@@ -1,3 +1,4 @@
+use crate::InputSource;
 use crate::errors::RuleError;
 use crate::errors::SanitizerError;
 use crate::errors::SanitizerMessage;
@@ -78,7 +79,8 @@ impl CrawlSession {
 
         logger.info(SanitizerMessage::CrawlingSubresource {
             depth,
-            url: url.clone(),
+            remote: InputSource::Url(url.clone()),
+            local: local_name.clone(),
         });
 
         let fetched = self

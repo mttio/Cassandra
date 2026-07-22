@@ -318,8 +318,8 @@ pub fn logging_thread(
         }
 
         match msg.message {
-            SanitizerMessage::CrawlingSubresource { url, .. } => {
-                subresource.source = Some(InputSource::Url(url));
+            SanitizerMessage::CrawlingSubresource { remote, .. } => {
+                subresource.source = Some(remote);
             }
             SanitizerMessage::ResourceCompleted => {
                 subresource.end = Some(Local::now());

@@ -1,11 +1,17 @@
 use std::{error::Error, fmt::Display, ops::Range, path::PathBuf};
 
-use colored::Colorize;
+use colored::{ColoredString, Colorize};
 use hickory_resolver::net::NetError;
 use lol_html::errors::RewritingError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use url::{Host, Url};
+use url::Host;
+
+use crate::InputSource;
+
+fn arrow() -> ColoredString {
+    "->".yellow()
+}
 
 // https://gist.github.com/dginev/f6da5e94335d545e0a7b
 fn truncate(mut input: String, maxsize: usize) -> (String, bool) {
@@ -61,7 +67,7 @@ pub enum RuleError {
     #[error(
         "Connecting to IDN host: `{}` {} `{}`",
         original.pretty(),
-        "->".yellow(),
+        arrow(),
         converted.pretty(),
     )]
     #[serde(rename = "idn_connection")]
@@ -104,7 +110,7 @@ pub enum RuleError {
         "{inner}: `{}`{} {}",
         original.pretty(),
         match replacement {
-            Some(x) => format!(" {} `{}`", "->".yellow(), x.pretty()),
+            Some(x) => format!(" {} `{}`", arrow(), x.pretty()),
             None => "".to_owned(),
         },
         format_range(location),
@@ -189,7 +195,11 @@ pub enum SanitizerError {
 #[derive(Debug)]
 pub enum SanitizerMessage {
     Error(SanitizerError),
-    CrawlingSubresource { depth: usize, url: Url },
+    CrawlingSubresource {
+        depth: usize,
+        remote: InputSource,
+        local: String,
+    },
     ResourceCompleted,
 }
 
@@ -197,12 +207,21 @@ impl Display for SanitizerMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Error(e) => write!(f, "{e}"),
-            Self::CrawlingSubresource { depth, url } => {
+            Self::CrawlingSubresource {
+                depth,
+                remote,
+                local,
+            } => {
                 write!(
                     f,
-                    "Crawling sub-resource (depth {}): {}",
+                    "Crawling sub-resource (depth {}): {} {} {}",
                     depth.pretty(),
-                    url.to_string().bright_blue()
+                    match remote {
+                        InputSource::File(remote) => remote.to_string_lossy().bright_cyan(),
+                        InputSource::Url(remote) => remote.to_string().bright_blue(),
+                    },
+                    arrow(),
+                    local.bright_cyan(),
                 )
             }
             SanitizerMessage::ResourceCompleted => write!(f, "Resource completed!"),

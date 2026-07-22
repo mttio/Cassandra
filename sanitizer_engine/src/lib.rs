@@ -26,7 +26,7 @@ pub mod resources;
 pub mod rules;
 pub mod url;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum InputSource {
     File(PathBuf),
     Url(Url),
