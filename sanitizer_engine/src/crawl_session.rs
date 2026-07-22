@@ -1,3 +1,4 @@
+use crate::FetchedContent;
 use crate::InputSource;
 use crate::errors::RuleError;
 use crate::errors::SanitizerError;
@@ -83,18 +84,18 @@ impl CrawlSession {
             local: local_name.clone(),
         });
 
-        let fetched = self
+        let FetchedContent { data, content_type } = self
             .client
             .fetch_raw(&url, logger, &self.policy, total_bytes)
             .await?;
 
         {
             let mut total_bytes = self.total_bytes.lock();
-            *total_bytes += fetched.data.len();
+            *total_bytes += data.len();
         }
 
-        let declared = fetched.content_type.as_deref().map(mime::clean);
-        let sniffed = mime::sniff(&fetched.data).or_else(|| {
+        let declared = content_type.as_deref().map(mime::clean);
+        let sniffed = mime::sniff(&data).or_else(|| {
             url.path()
                 .rsplit_once('.')
                 .map(|(_, x)| x)
@@ -111,53 +112,34 @@ impl CrawlSession {
         let resource_type =
             sniffed.or_else(|| declared.as_deref().and_then(KnownResourceType::parse));
 
-        let sanitized_data = match resource_type {
+        let output = self.output_dir.join(&local_name);
+
+        match resource_type {
             None => {
                 self.policy
                     .resources
                     .unknown_resource
                     .handle(logger, RuleError::UnknownResourceType { mime: declared })?;
 
-                fetched.data
+                fs::write(&output, &data).map_err(|e| SanitizerError::WriteFile(output, e))
             }
-            Some(KnownResourceType::Png) => strip_png_metadata(&fetched.data),
-            Some(KnownResourceType::Jpeg) => strip_jpeg_metadata(&fetched.data),
+            Some(KnownResourceType::Png) => {
+                let data = strip_png_metadata(&data);
+                fs::write(&output, &data).map_err(|e| SanitizerError::WriteFile(output, e))
+            }
+            Some(KnownResourceType::Jpeg) => {
+                let data = strip_jpeg_metadata(&data);
+                fs::write(&output, &data).map_err(|e| SanitizerError::WriteFile(output, e))
+            }
             Some(KnownResourceType::Gif | KnownResourceType::Webp) => {
-                // TODO: maybe remove metadata for these
-                fetched.data
+                fs::write(&output, &data).map_err(|e| SanitizerError::WriteFile(output, e))
             }
             Some(KnownResourceType::Css) => {
-                let css_str = String::from_utf8_lossy(&fetched.data);
-                let (sanitized_css, nested_urls) =
-                    crate::resources::css::sanitize(&css_str, &url, logger, &self.policy)?;
-                for (n_url, n_local) in nested_urls {
-                    self.try_enqueue_subresource(n_url, n_local, depth + 1);
-                }
-                sanitized_css.into_bytes()
+                self.process_css_file(logger, depth, &url, &data, output)
             }
-            Some(KnownResourceType::Js) => {
-                let js_str = String::from_utf8_lossy(&fetched.data);
-                let content = crate::resources::javascript::sanitize(
-                    &js_str,
-                    logger,
-                    &self.policy.resources.dangerous_js,
-                )?;
-
-                content.as_bytes().to_vec()
-            }
-            Some(KnownResourceType::Pdf) => {
-                crate::resources::pdf::sanitize(
-                    &fetched.data,
-                    logger,
-                    self.policy.resources.pdf_active_content,
-                )?;
-
-                fetched.data
-            }
-        };
-
-        let sub_path = self.output_dir.join(&local_name);
-        fs::write(&sub_path, &sanitized_data).map_err(|e| SanitizerError::WriteFile(sub_path, e))
+            Some(KnownResourceType::Js) => self.process_js_file(logger, &data, output),
+            Some(KnownResourceType::Pdf) => self.process_pdf_file(logger, &data, output),
+        }
     }
 
     /// Checks limits and registers a sub-resource URL, then enqueues it if valid and not visited.
@@ -202,68 +184,83 @@ impl CrawlSession {
     }
 
     /// Worker task processing a local file (HTML, PDF, etc.). Parses HTML, rewrites links, scans PDFs, and enqueues referenced sub-resources.
-    pub fn process_file(self: Arc<Self>, path: PathBuf) {
+    pub fn process_file(self: &Arc<Self>, path: PathBuf) -> Result<(), SanitizerError> {
         let extension = path
             .extension()
             .map(|ext| ext.to_string_lossy().to_lowercase())
             .unwrap_or_default();
 
-        let result = match extension.as_str() {
-            "pdf" => self.process_pdf_file(path),
-            "css" => self.process_css_file(path),
-            "js" => self.process_js_file(path),
+        match extension.as_str() {
+            "pdf" => {
+                let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
+                let output = self.output_dir.join(format!("{}.pdf", self.index()));
+                self.process_pdf_file(&self.logger, &data, output)
+            }
+            "css" => {
+                let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
+                let output = self.output_dir.join(format!("{}.css", self.index()));
+                self.process_css_file(
+                    &self.logger,
+                    0,
+                    &Url::parse("https://localhost").unwrap(),
+                    &data,
+                    output,
+                )
+            }
+            "js" => {
+                let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
+                let output = self.output_dir.join(format!("{}.js", self.index()));
+                self.process_js_file(&self.logger, &data, output)
+            }
             _ => self.process_html_file(path),
-        };
-
-        if let Err(e) = result {
-            self.logger.error(e);
-        } else {
-            self.logger.info(SanitizerMessage::ResourceCompleted);
         }
     }
 
-    fn process_pdf_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
-        let output_path = self.output_dir.join(format!("{}.pdf", self.index()));
-        let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
-
-        crate::resources::pdf::sanitize(
-            &data,
-            &self.logger,
-            self.policy.resources.pdf_active_content,
-        )?;
-
-        fs::write(&output_path, &data).map_err(|e| SanitizerError::WriteFile(output_path, e))?;
-
-        Ok(())
+    fn process_pdf_file(
+        &self,
+        logger: &impl Log,
+        data: &[u8],
+        output: PathBuf,
+    ) -> Result<(), SanitizerError> {
+        crate::resources::pdf::sanitize(data, logger, self.policy.resources.pdf_active_content)?;
+        fs::write(&output, data).map_err(|e| SanitizerError::WriteFile(output, e))
     }
 
-    fn process_css_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
-        let output = self.output_dir.join(format!("{}.css", self.index()));
-        let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
-        let (content, _) = crate::resources::css::sanitize(
-            &String::from_utf8_lossy(&data),
-            &Url::parse("https://localhost").unwrap(),
-            &self.logger,
+    fn process_css_file(
+        self: &Arc<Self>,
+        logger: &impl Log,
+        depth: usize,
+        base_url: &Url,
+        data: &[u8],
+        output: PathBuf,
+    ) -> Result<(), SanitizerError> {
+        let (content, nested_urls) = crate::resources::css::sanitize(
+            &String::from_utf8_lossy(data),
+            base_url,
+            logger,
             &self.policy,
         )?;
 
-        fs::write(&output, content.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))?;
+        for (remote, local) in nested_urls {
+            self.try_enqueue_subresource(remote, local, depth + 1);
+        }
 
-        Ok(())
+        fs::write(&output, content.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))
     }
 
-    fn process_js_file(&self, path: PathBuf) -> Result<(), SanitizerError> {
-        let output = self.output_dir.join(format!("{}.js", self.index()));
-        let data = fs::read(&path).map_err(|e| SanitizerError::ReadFile(path, e))?;
+    fn process_js_file(
+        &self,
+        logger: &impl Log,
+        data: &[u8],
+        output: PathBuf,
+    ) -> Result<(), SanitizerError> {
         let content = crate::resources::javascript::sanitize(
-            &String::from_utf8_lossy(&data),
-            &self.logger,
+            &String::from_utf8_lossy(data),
+            logger,
             &self.policy.resources.dangerous_js,
         )?;
 
-        fs::write(&output, content.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))?;
-
-        Ok(())
+        fs::write(&output, content.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))
     }
 
     fn process_html_file(self: &Arc<Self>, path: PathBuf) -> Result<(), SanitizerError> {

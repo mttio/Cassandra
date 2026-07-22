@@ -85,7 +85,13 @@ pub fn library(
                     session.logger.info(SanitizerMessage::ResourceCompleted);
                 }
             }),
-            InputSource::File(path) => runtime.spawn(lazy(move |_| session.process_file(path))),
+            InputSource::File(path) => runtime.spawn(lazy(move |_| {
+                if let Err(e) = session.process_file(path) {
+                    session.logger.error(e);
+                } else {
+                    session.logger.info(SanitizerMessage::ResourceCompleted);
+                }
+            })),
         };
     }
 

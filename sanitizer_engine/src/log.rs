@@ -405,7 +405,7 @@ mod tests {
         )
         .unwrap();
 
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, _) = std::sync::mpsc::channel();
         let logger = ChannelLogger {
             index: 0,
             subresource: 0,
@@ -429,16 +429,15 @@ mod tests {
             url_map,
         ));
 
-        session.process_file(file_path.clone());
+        let result = session.process_file(file_path.clone());
 
         // Clean up temp file
         let _ = fs::remove_file(file_path);
 
         // Retrieve the logged error
-        let msg = rx.try_recv().expect("Expected a log message");
         std::assert_matches!(
-            msg.message,
-            SanitizerMessage::Error(SanitizerError::Rule(RuleError::Replace {
+            result,
+            Err(SanitizerError::Rule(RuleError::Replace {
                 inner: RuleReplaceError::XmlEntityDeclaration,
                 ..
             }))
