@@ -309,9 +309,9 @@ Le tabelle seguenti misurano la latenza per-input in *ms*, e il throughput in *i
 ### 4.3 Scalability ed Efficienza della Pipeline Parallela
 
 La scalabilità del sistema è stata valutata confrontando **tre differenti tipologie di carico** al variare del numero di thread worker del runtime Tokio (1, 2, 4, 8 e 16):
-1. **Carico Piccolo (140 file piccoli)**: Batch rapido (~1,4 MB totali) per valutare l'overhead di scheduling.
-2. **Carico Grande (7000 file piccoli)**: Batch ad alto numero di file (~70 MB totali) per saturare il pipeline concorrente.
-3. **Carico Pochi File Grandi (20 file da 5MB)**: Batch ad alto volume di payload per singolo file (~100 MB totali) per valutare la scalabilità su elaborazioni CPU-bound pesanti.
+1. **Carico Piccolo (140 file piccoli)**: Batch rapido compost da 140 file aventi dimensione media di **~305 Byte** (range da 83 Byte a 562 Byte per file), per un volume complessivo di **~41,7 KB** (**0,04 MB**). Utile per valutare l'overhead di scheduling.
+2. **Carico Grande (7000 file piccoli)**: Batch ad alto numero di file (7000 file piccoli, dimensione media **~305 Byte** per file) per un volume complessivo di **~2,04 MB** (2.134.500 Byte). Utile per saturare la pipeline concorrente con un numero elevato di sorgenti.
+3. **Carico Pochi File Grandi (20 file da 5MB)**: Batch ad alto volume di payload per singolo file (20 file HTML da 5,24 MB ciascuno) per un volume complessivo di **~100 MB** (104.857.360 Byte), per valutare la scalabilità su elaborazioni CPU-bound pesanti.
 
 #### Prestazioni di Scalabilità (Durate di Esecuzione e Speedup)
 | Numero Thread | Durata Piccolo | Speedup Piccolo | Durata Grande | Speedup Grande | Durata Pochi File Grandi | Speedup Pochi File Grandi |

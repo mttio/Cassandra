@@ -256,9 +256,9 @@ Throughput (inputs/second) and per-input latency (ms) were measured as a functio
 ## Scalability & Parallel Pipeline Efficiency
 
 Scalability was measured by processing three distinct workloads across varying Tokio worker thread counts (1, 2, 4, 8, and 16):
-1. **Small Workload (140 small files)**: Fast task completion batch (~1.4MB total).
-2. **Large Workload (7000 small files)**: High-file-count batch (~70MB total).
-3. **Few Large Files Workload (20 files, 5MB each)**: High-payload-volume batch (~100MB total).
+1. **Small Workload (140 small files)**: Fast task completion batch of 140 files (~305 B avg size per file, ~41.7 KB total).
+2. **Large Workload (7000 small files)**: High-file-count batch of 7000 files (~305 B avg size per file, ~2.04 MB total).
+3. **Few Large Files Workload (20 files, 5MB each)**: High-payload-volume batch of 20 files (~5.24 MB each, ~100 MB total).
 
 ### Speed-up Curves
 
