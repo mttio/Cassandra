@@ -109,4 +109,4 @@ _Outputs:_
 
 ## Final Report
 
-For a complete and comprehensive analysis of the project requirements, architecture, Rust systems programming features, evaluation results, and limitations assessment, refer to the [docs/REPORT.md](file:///Users/matteoberga/Polito/programm/API%20Programming/final%20project/cassandra/docs/REPORT.md) final report.
+For a complete and comprehensive analysis of the project requirements, architecture, Rust systems programming features, evaluation results, and limitations assessment, refer to the [docs/REPORT.md](https://github.com/mttio/Cassandra/blob/main/docs/REPORT.pdf) final report.
