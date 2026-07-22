@@ -62,6 +62,22 @@ pub fn generate_local_filename(url: &Url, default_ext: &str) -> String {
     format!("sub_{:016x}.{}", hash_val, ext)
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

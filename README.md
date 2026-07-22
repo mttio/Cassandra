@@ -14,7 +14,7 @@ To build and run the application, ensure you have the following installed:
 
 ---
 
-## 🛠️ Running the CLI Application
+## Running the CLI Application
 
 The default run target of the workspace executes the `cli_application`. It processes directories, individual files, or remote URLs.
 

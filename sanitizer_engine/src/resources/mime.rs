@@ -109,6 +109,33 @@ pub fn validate(declared: Option<&str>, sniffed: Option<KnownResourceType>) -> b
     true
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

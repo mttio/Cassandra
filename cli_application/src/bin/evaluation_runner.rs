@@ -108,6 +108,10 @@ struct ScalabilityMetric {
     large_speedup: f64,
     large_parse_secs: f64,
     large_write_secs: f64,
+    large_files_duration_secs: f64,
+    large_files_speedup: f64,
+    large_files_parse_secs: f64,
+    large_files_write_secs: f64,
 }
 
 #[derive(serde::Serialize)]
@@ -357,13 +361,24 @@ fn main() -> Result<()> {
         large_workload.extend(base_workload.clone());
     }
 
+    // Create large files workload (20x replication of perf_5mb.html = 20 files, ~100MB)
+    let mut large_files_workload = Vec::new();
+    let perf_5mb_path = corpus_dir.join("benign/perf_5mb.html");
+    if perf_5mb_path.exists() {
+        for _ in 0..20 {
+            large_files_workload.push(InputSource::File(perf_5mb_path.clone()));
+        }
+    }
+
     println!("Total inputs in small workload: {}", small_workload.len());
     println!("Total inputs in large workload: {}", large_workload.len());
+    println!("Total inputs in large files workload: {} (5MB each)", large_files_workload.len());
 
     let thread_counts = vec![1, 2, 4, 8, 16];
     let mut scalability_metrics = Vec::new();
     let mut small_base_duration = 0.0;
     let mut large_base_duration = 0.0;
+    let mut large_files_base_duration = 0.0;
 
     for threads in thread_counts {
         println!(
@@ -376,7 +391,10 @@ fn main() -> Result<()> {
             .enable_all()
             .build()?;
 
-        let policy = Arc::new(Policy::default());
+        let mut policy = Policy::default();
+        policy.resources.max_bytes =
+            serde_json::from_str("{\"value\": 52428800, \"level\": \"error\"}").unwrap();
+        let policy = Arc::new(policy);
 
         // Run small workload
         let start_small = Instant::now();
@@ -404,7 +422,7 @@ fn main() -> Result<()> {
         let (_reports_large, large_parse, large_write) = run_sanitization(
             &custom_rt,
             large_workload.clone(),
-            policy,
+            policy.clone(),
             output_test_dir
                 .join("scalability_large")
                 .join(threads.to_string()),
@@ -420,6 +438,27 @@ fn main() -> Result<()> {
             1.0
         };
 
+        // Run large files workload (pochi file molto grandi)
+        let start_lf = Instant::now();
+        let (_reports_lf, lf_parse, lf_write) = run_sanitization(
+            &custom_rt,
+            large_files_workload.clone(),
+            policy,
+            output_test_dir
+                .join("scalability_large_files")
+                .join(threads.to_string()),
+        )?;
+        let lf_elapsed = start_lf.elapsed().as_secs_f64();
+
+        if threads == 1 {
+            large_files_base_duration = lf_elapsed;
+        }
+        let lf_speedup = if lf_elapsed > 0.0 {
+            large_files_base_duration / lf_elapsed
+        } else {
+            1.0
+        };
+
         println!(
             "  [Small] Duration: {:.3} s (Parse: {:.3}s, Write: {:.3}s) | Speedup: {:.2}x",
             small_elapsed, small_parse, small_write, small_speedup
@@ -427,6 +466,10 @@ fn main() -> Result<()> {
         println!(
             "  [Large] Duration: {:.3} s (Parse: {:.3}s, Write: {:.3}s) | Speedup: {:.2}x",
             large_elapsed, large_parse, large_write, large_speedup
+        );
+        println!(
+            "  [Large Files] Duration: {:.3} s (Parse: {:.3}s, Write: {:.3}s) | Speedup: {:.2}x",
+            lf_elapsed, lf_parse, lf_write, lf_speedup
         );
 
         scalability_metrics.push(ScalabilityMetric {
@@ -439,6 +482,10 @@ fn main() -> Result<()> {
             large_speedup,
             large_parse_secs: large_parse,
             large_write_secs: large_write,
+            large_files_duration_secs: lf_elapsed,
+            large_files_speedup: lf_speedup,
+            large_files_parse_secs: lf_parse,
+            large_files_write_secs: lf_write,
         });
     }
 

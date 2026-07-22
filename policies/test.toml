@@ -1,0 +1,29 @@
+[html]
+allow_scripts = []
+allow_origins = ["trusted.com"]
+event_handlers = "info"
+dangerous_scripts = "error"
+
+[urls]
+dangerous_domains = [
+  "malicious-domain.com",
+  "evil.com",
+]
+idn = "warn"
+
+[resources]
+fetch_sub_resources = true
+max_depth = 1
+max_requests = { value = 5, level = "error" }
+max_bytes = { value = 1048576, level = "error" }
+unknown_resource = "error"
+
+[connections]
+connection_timeout = "3s"
+overall_timeout = "15s"
+max_redirects = {
+  value = 2,
+  level = "error"
+}
+user_agent = "cassandra/0.1.0"
+dangerous_domain = "error"

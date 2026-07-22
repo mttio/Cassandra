@@ -103,6 +103,30 @@ pub fn strip_png_metadata(data: &[u8]) -> Vec<u8> {
     output
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

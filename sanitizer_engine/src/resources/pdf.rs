@@ -100,6 +100,25 @@ fn is_pdf_delimiter(b: u8) -> bool {
         || b == b'%'
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #[cfg(test)]
 mod tests {
     use url::Url;

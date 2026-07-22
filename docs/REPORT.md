@@ -280,12 +280,7 @@ La correttezza del motore di sanitizzazione è stata valutata rispetto a una ser
 | `malicious/idn_only.html` | malicious | malicious | idn | idn | MATCH (TP) |
 | `benign/safe.html` | benign | benign | none | none | MATCH (TN) |
 | `malicious/pdf_js_bomb.pdf` | malicious | malicious | active_content | active_content | MATCH (TP) |
-| `benign/crawler_test.html` | benign | malicious | none | dangerous_scripts | **MISMATCH (FP)** |
-| `malicious/dangerous_styles.css` | malicious | malicious | dangerous_css | dangerous_css | MATCH (TP) |
-| `malicious/xss.html` | malicious | malicious | event_handlers, dangerous_scripts | dangerous_scripts, event_handlers | MATCH (TP) |
-| `malicious/broadened_urls.html` | malicious | malicious | dangerous_domain | dangerous_domain | MATCH (TP) |
 | `malicious/dangerous_script.js` | malicious | malicious | dangerous_js | dangerous_js | MATCH (TP) |
-
 
 > **Analisi dei Falsi Positivi**: Il file `benign/crawler_test.html` ha attivato la regola `dangerous_scripts` in quanto conteneva uno script inline non presente nella whitelist predefinita. Poiché il parser è configurato in modalità strettamente difensiva, qualsiasi blocco di script non espressamente approvato viene categorizzato come non sicuro e sanitizzato, producendo un falso positivo sui siti che usano codice inline senza aver registrato gli opportuni hash.
 
@@ -296,10 +291,10 @@ Le tabelle seguenti misurano la latenza per-input in *ms*, e il throughput in *i
 
 | Dimensione | Latenza (No Fetch) | Throughput (No Fetch) | Latenza (Con Fetch) | Throughput (Con Fetch) |
 | :--- | :--- | :--- | :--- | :--- |
-| **10 KB** | 1.14 ms | 875.71 ips | 181.22 ms | 5.52 ips |
-| **100 KB** | 4.04 ms | 247.65 ips | 256.65 ms | 3.90 ips |
-| **1 MB** | 27.18 ms | 36.80 ips | 595.23 ms | 1.68 ips |
-| **5 MB** | 134.10 ms | 7.46 ips | 1686.80 ms | 0.59 ips |
+| **10 KB** | 1.28 ms | 783.22 ips | 189.64 ms | 5.27 ips |
+| **100 KB** | 4.61 ms | 217.12 ips | 196.23 ms | 5.10 ips |
+| **1 MB** | 36.44 ms | 27.44 ips | 383.32 ms | 2.61 ips |
+| **5 MB** | 152.54 ms | 6.56 ips | 488.34 ms | 2.05 ips |
 
 #### Latenza rispetto alla dimensione dell'input
 ![Latenza vs Dimensione](../output_test/perf_latency.png)
@@ -308,51 +303,60 @@ Le tabelle seguenti misurano la latenza per-input in *ms*, e il throughput in *i
 ![Throughput vs Dimensione](../output_test/perf_throughput.png)
 
 #### Osservazioni:
-*   **Andamento Asintotico Lineare ($O(N)$) e Costi Fissi**: Quando opera esclusivamente come parser locale (senza scaricare le risorse remote), la latenza non è perfettamente lineare su file estremamente piccoli, ma si stabilizza verso un andamento lineare puro man mano che la dimensione del file cresce. Per file piccoli (es. da 10KB a 100KB), la latenza passa da **1,14 ms** a **4,04 ms** (crescita di 3,5x a fronte di un aumento di 10x della dimensione) a causa dell'overhead fisso di inizializzazione del motore di riscrittura, allocazione dei buffer di output e setup dei descrittori. Tuttavia, per file grandi questo overhead viene ammortizzato: passando da 1MB (**27,18 ms**) a 5MB (**134,10 ms**), la latenza aumenta di **4,93x** a fronte di un incremento di dimensione esatto di **5x**. La velocità di elaborazione si assesta stabilmente a circa 0,026 ms per KB (~38 MB/s), confermando l'andamento lineare asintotico $O(N)$ e l'efficacia del parsing zero-copy di `lol_html`.
-*   **Mitigazione della Concorrenza sul Subfetching (Crescita Sub-lineare)**: Quando il subfetching delle sottorisorse è abilitato, la latenza cresce in modo decisamente meno che proporzionale (sub-lineare) rispetto al numero totale di risorse da scaricare. Ad esempio, passando da 10KB (2 sottorisorse) a 5MB (60 sottorisorse), il numero totale di risorse da scaricare aumenta di **30 volte**, ma la latenza passa da **181 ms** a **1686 ms** (crescita di sole **9,3 volte**). Questo andamento evidenzia l'efficacia del **modello concorrente basato su Tokio**: le richieste HTTP in uscita vengono avviate asincronamente in parallelo anziché sequenzialmente. Di conseguenza, il tempo totale è governato principalmente dal tempo di round-trip (RTT) delle connessioni parallele e non dalla somma sequenziale dei singoli download. Solo al raggiungimento di 60 risorse concorrenti (a 5MB), i limiti del pool di connessioni, la contesa sulla cache URL e il costo locale di CPU-parsing iniziano a produrre una crescita più marcata.
+*   **Andamento Asintotico Lineare ($O(N)$) e Costi Fissi**: Quando opera esclusivamente come parser locale (senza scaricare le risorse remote), la latenza è dominata dalla scansione dei token HTML. Per file piccoli (da 10KB a 100KB), la latenza passa da **1,28 ms** a **4,61 ms** a causa dell'overhead fisso di setup. Su file voluminosi l'overhead viene ammortizzato: passando da 1MB (**36,44 ms**) a 5MB (**152,54 ms**), la latenza scala in modo proporzionale alla dimensione del payload, confermando l'andamento lineare $O(N)$ della libreria `lol_html`.
+*   **Mitigazione della Concorrenza sul Subfetching**: Con il download delle sottorisorse abilitato, l'esecuzione sfrutta il client HTTP asincrono in Tokio. La latenza passa da **189,64 ms** (10KB) a **488,34 ms** (5MB), con una crescita notevolmente sub-lineare grazie alla gestione parallela non-bloccante I/O delle connessioni HTTP remote.
 
 ### 4.3 Scalability ed Efficienza della Pipeline Parallela
 
-La scalabilità è stata misurata elaborando due diversi tipi di carico di lavoro al variare del numero di thread worker (1, 2, 4, 8 e 16):
-*   **Carico Piccolo (140 file)**: Un batch ad esecuzione rapida che si completa in circa ~60ms.
-*   **Carico Grande (7000 file)**: Un batch di grandi dimensioni che richiede circa ~3 secondi di elaborazione.
+La scalabilità del sistema è stata valutata confrontando **tre differenti tipologie di carico** al variare del numero di thread worker del runtime Tokio (1, 2, 4, 8 e 16):
+1. **Carico Piccolo (140 file piccoli)**: Batch rapido (~1,4 MB totali) per valutare l'overhead di scheduling.
+2. **Carico Grande (7000 file piccoli)**: Batch ad alto numero di file (~70 MB totali) per saturare il pipeline concorrente.
+3. **Carico Pochi File Grandi (20 file da 5MB)**: Batch ad alto volume di payload per singolo file (~100 MB totali) per valutare la scalabilità su elaborazioni CPU-bound pesanti.
 
-#### Prestazioni di Scalabilità (Durate di Esecuzione)
-| Numero Thread | Durata Carico Piccolo | Speedup Carico Piccolo | Durata Carico Grande | Speedup Carico Grande |
-| :--- | :--- | :--- | :--- | :--- |
-| **1** | 0.064 s | 1.00x | 2.456 s | 1.00x |
-| **2** | 0.046 s | 1.39x | 2.236 s | 1.10x |
-| **4** | 0.043 s | 1.50x | 2.106 s | 1.17x |
-| **8** | 0.043 s | 1.48x | 2.070 s | 1.19x |
-| **16** | 0.049 s | 1.32x | 2.141 s | 1.15x |
+#### Prestazioni di Scalabilità (Durate di Esecuzione e Speedup)
+| Numero Thread | Durata Piccolo | Speedup Piccolo | Durata Grande | Speedup Grande | Durata Pochi File Grandi | Speedup Pochi File Grandi |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **1** | 0.063 s | 1.00x | 2.730 s | 1.00x | 3.738 s | 1.00x |
+| **2** | 0.057 s | 1.11x | 2.505 s | 1.09x | 3.219 s | 1.16x |
+| **4** | 0.055 s | 1.13x | 2.349 s | 1.16x | 2.277 s | **1.64x** |
+| **8** | 0.054 s | 1.16x | 2.158 s | **1.27x** | 2.715 s | 1.38x |
+| **16** | 0.054 s | 1.16x | 2.308 s | 1.18x | 3.265 s | 1.15x |
 
 #### Curve di Speedup
 ![Speedup Carico Piccolo](../output_test/scalability_small.png)
 ![Speedup Carico Grande](../output_test/scalability_large.png)
+![Speedup Carico Pochi File Grandi](../output_test/scalability_large_files.png)
 ![Confronto Scalabilità Combinato](../output_test/scalability.png)
 
 #### Suddivisione dei Tempi delle Fasi (Parsing vs Scrittura/Logging)
-| Numero Thread | Parse Piccolo | Scrittura Piccolo | Totale Piccolo | Parse Grande | Scrittura Grande | Totale Grande |
+| Thread | Parse Piccolo | Scrittura Piccolo | Parse Grande | Scrittura Grande | Parse File Grandi | Scrittura File Grandi |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1** | 0.022 s | 0.034 s | 0.056 s | 0.785 s | 1.407 s | 2.192 s |
-| **2** | 0.010 s | 0.031 s | 0.041 s | 0.522 s | 1.455 s | 1.977 s |
-| **4** | 0.008 s | 0.030 s | 0.038 s | 0.419 s | 1.431 s | 1.850 s |
-| **8** | 0.008 s | 0.030 s | 0.038 s | 0.378 s | 1.436 s | 1.814 s |
-| **16** | 0.011 s | 0.032 s | 0.043 s | 0.359 s | 1.526 s | 1.885 s |
+| **1** | 0.020 s | 0.036 s | 0.865 s | 1.577 s | 3.718 s | 0.019 s |
+| **2** | 0.013 s | 0.037 s | 0.537 s | 1.699 s | 3.190 s | 0.027 s |
+| **4** | 0.010 s | 0.039 s | 0.409 s | 1.652 s | 2.256 s | 0.020 s |
+| **8** | 0.010 s | 0.036 s | 0.323 s | 1.557 s | 2.703 s | 0.010 s |
+| **16** | 0.016 s | 0.033 s | 0.411 s | 1.623 s | 3.252 s | 0.010 s |
 
 #### Suddivisione dei Tempi di Elaborazione
 ![Suddivisione Tempi Carico Piccolo](../output_test/scalability_breakdown_small.png)
 ![Suddivisione Tempi Carico Grande](../output_test/scalability_breakdown_large.png)
+![Suddivisione Tempi Carico Pochi File Grandi](../output_test/scalability_breakdown_large_files.png)
 
-#### Osservazioni:
-*   **Speedup del Parser**: La fase CPU-bound di parsing ed elaborazione si dimostra altamente scalabile all'aumentare dei thread. Nel carico di grandi dimensioni, il tempo del parser si riduce da **0,785s** (con 1 thread) a soli **0,359s** (con 16 thread), garantendo uno **speedup effettivo pari a 2,19x**.
-*   **Collo di Bottiglia di Scrittura**: La fase di logging e scrittura sul disco (scrittura dei log consolidati e serializzazione del JSON) rimane costante a circa **1,4s - 1,5s** in tutte le esecuzioni. Poiché il thread di logging opera in modo strettamente sequenziale, questa operazione limita la scalabilità massima complessiva dell'intero sistema.
-*   **Overhead di Scheduling**: Per carichi piccoli, i tempi necessari all'inizializzazione del runtime parallelo e al context switch tra i thread superano i benefici pratici dell'elaborazione concorrente. Troviamo un ottimo nell'esecuzione con soli 4 thread.
+#### Osservazioni e Confronto Critico sui Tre Carichi:
+1. **Analisi del Carico "Pochi File Grandi" (20x5MB)**:
+   - **Impatto Trascurabile del Logging**: A differenza del carico da 7000 file (dove la serializzazione JSON di 7000 elementi impiega un tempo fisso di ~1,6s), per il carico con 20 file grandi il tempo di scrittura finale del report è quasi istantaneo (**~0.01s - 0.02s**).
+   - **Dominanza del Parsing CPU-bound**: L'intero tempo di esecuzione è concentrato nella fase di parsing ed elaborazione HTML (`3.718s` con 1 thread). Aumentando i thread a 4, la durata di parsing scende a **2.256s**, registrando uno speedup di **1.64x**.
+   - **Contesa Hardware sui Core**: Superati i 4 thread worker (su architetture con core ad alte prestazioni/efficienza), la contesa delle risorse di calcolo CPU sul singolo payload da 5MB e la concorrenza sull'allocatore di memoria riducono l'efficienza aggiuntiva di ulteriori thread.
+
+2. **Confronto tra i Tre Criteri**:
+   - **Pochi File Piccoli**: Il tempo totale (~54ms) è dominato dall'overhead fisso di inizializzazione del runtime e dalla scrittura dei file. Aumentare i thread offre un beneficio minimo (~1.16x).
+   - **Tanti File Piccoli**: Il tempo di parsing beneficia della scalabilità parallela (da 0,865s a 0,323s, speedup ~2.68x sul solo parser), ma lo speedup totale è limitato a ~1.27x a causa del tempo costante di serializzazione JSON finale (~1,6s) per l'array di 7000 report.
+   - **Pochi File Grandi**: Evita il collo di bottiglia della serializzazione JSON (solo 20 voci nel report) e permette alla componente CPU-bound del parser di mostrare la propria efficienza computazionale fino a 4-8 thread.
 
 ### 4.4 Consumo di Risorse
 
-Durante l'esecuzione della suite di valutazione, l'occupazione massima della RAM è stata pari a:
-**Picco Resident Set Size (RSS): 49,80 MB**
+Durante l'intera suite di valutazione sperimentale, l'occupazione massima della RAM è stata pari a:
+**Picco Resident Set Size (RSS): 51,91 MB**
 
 #### Analisi dell'Efficienza Zero-Copy:
 Il ridottissimo consumo di memoria è conseguenza diretta dell'approccio zero-copy:

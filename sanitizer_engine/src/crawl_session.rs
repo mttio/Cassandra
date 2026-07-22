@@ -63,6 +63,35 @@ impl CrawlSession {
         self.logger.index
     }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
     /// Worker task fetching and sanitizing a single sub-resource URL. Recursively enqueues nested resources (like inside CSS).
     async fn crawl_subresource(
         self: &Arc<Self>,
@@ -182,6 +211,27 @@ impl CrawlSession {
             }
         });
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     /// Worker task processing a local file (HTML, PDF, etc.). Parses HTML, rewrites links, scans PDFs, and enqueues referenced sub-resources.
     pub fn process_file(self: &Arc<Self>, path: PathBuf) -> Result<(), SanitizerError> {
@@ -304,6 +354,25 @@ impl CrawlSession {
 
         Ok(())
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     /// Worker task fetching a remote HTML document, sanitizing it, and enqueuing referenced sub-resources.
     pub async fn process_url(self: &Arc<Self>, url: Url) -> Result<(), SanitizerError> {
