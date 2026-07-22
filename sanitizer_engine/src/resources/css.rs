@@ -1,5 +1,5 @@
 use crate::resources::space_around;
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
 use url::Url;
 use winnow::{
@@ -56,12 +56,12 @@ where
 /// * `(String, Vec<(Url, String)>)` - A tuple containing:
 ///   1. The rewritten CSS string with references updated to local filenames.
 ///   2. A vector of tuples pairing the fully resolved absolute URLs of discovered sub-resources with their generated local filenames.
-pub fn sanitize(
-    input: &str,
+pub fn sanitize<'a>(
+    input: &'a str,
     base_url: &Url,
     logger: &impl Log,
     policy: &Policy,
-) -> Result<(String, Vec<(Url, String)>), RuleError> {
+) -> Result<(Cow<'a, str>, Vec<(Url, String)>), RuleError> {
     let mut replacements = Vec::new();
     let mut extracted = Vec::new();
     let mut content = Partial::new(LocatingSlice::new(input));
@@ -114,12 +114,16 @@ pub fn sanitize(
         replacements.push((location, format!("\"{processed}\"")));
     }
 
+    if replacements.is_empty() {
+        return Ok((Cow::from(input), extracted));
+    }
+
     let mut output = input.to_owned();
     for (location, replacement) in replacements.into_iter().rev() {
         output.replace_range(location, &replacement);
     }
 
-    Ok((output, extracted))
+    Ok((Cow::from(output), extracted))
 }
 
 #[cfg(test)]

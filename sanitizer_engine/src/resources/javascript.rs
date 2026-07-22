@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::resources::space_around;
 use winnow::{
     LocatingSlice, Parser,
@@ -20,11 +22,11 @@ use crate::{
 ///
 /// # Returns
 /// * `Result<(), SanitizationError>` - `Ok` if no dangerous keywords are found, otherwise an `Err` indicating what was found.
-pub fn sanitize(
-    input: &str,
+pub fn sanitize<'a>(
+    input: &'a str,
     logger: &impl Log,
     rule: &ReplaceRule<JsReplace>,
-) -> Result<String, SanitizerError> {
+) -> Result<Cow<'a, str>, SanitizerError> {
     let mut content = LocatingSlice::new(input);
 
     let mut parser = repeat_till(
@@ -46,11 +48,11 @@ pub fn sanitize(
 
     while let Ok::<_, EmptyError>((value, location)) = parser.parse_next(&mut content) {
         if let Some(replace) = rule.handle(format!("{value}..)"), location, logger)? {
-            return Ok(replace);
+            return Ok(Cow::from(replace));
         }
     }
 
-    Ok(input.to_owned())
+    Ok(Cow::from(input))
 }
 
 #[cfg(test)]

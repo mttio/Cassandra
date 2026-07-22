@@ -234,18 +234,15 @@ impl CrawlSession {
         data: &[u8],
         output: PathBuf,
     ) -> Result<(), SanitizerError> {
-        let (content, nested_urls) = crate::resources::css::sanitize(
-            &String::from_utf8_lossy(data),
-            base_url,
-            logger,
-            &self.policy,
-        )?;
+        let data = String::from_utf8_lossy(data);
+        let (data, nested_urls) =
+            crate::resources::css::sanitize(&data, base_url, logger, &self.policy)?;
 
         for (remote, local) in nested_urls {
             self.try_enqueue_subresource(remote, local, depth + 1);
         }
 
-        fs::write(&output, content.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))
+        fs::write(&output, data.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))
     }
 
     fn process_js_file(
@@ -254,13 +251,14 @@ impl CrawlSession {
         data: &[u8],
         output: PathBuf,
     ) -> Result<(), SanitizerError> {
-        let content = crate::resources::javascript::sanitize(
-            &String::from_utf8_lossy(data),
+        let data = String::from_utf8_lossy(data);
+        let data = crate::resources::javascript::sanitize(
+            &data,
             logger,
             &self.policy.resources.dangerous_js,
         )?;
 
-        fs::write(&output, content.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))
+        fs::write(&output, data.as_bytes()).map_err(|e| SanitizerError::WriteFile(output, e))
     }
 
     fn process_html_file(self: &Arc<Self>, path: PathBuf) -> Result<(), SanitizerError> {
