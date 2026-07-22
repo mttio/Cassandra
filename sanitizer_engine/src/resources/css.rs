@@ -1,10 +1,50 @@
+use crate::resources::space_around;
+use std::{borrow::Cow, ops::Range};
+
 use url::Url;
+use winnow::{
+    LocatingSlice, Parser, Partial,
+    ascii::{escaped, multispace0, multispace1},
+    combinator::{alt, delimited, repeat_till},
+    error::{EmptyError, ParserError},
+    token::{any, take_while},
+};
 
 use crate::{
-    errors::SanitizerError,
+    errors::RuleError,
     log::Log,
-    rules::{CssUrl, ReplaceRule},
+    policy::Policy,
+    url::{detect_idn, is_dangerous_uri},
 };
+
+fn url_parser<'a, Error>(
+    input: &mut Partial<LocatingSlice<&'a str>>,
+) -> Result<(String, Range<usize>), Error>
+where
+    Error: ParserError<Partial<LocatingSlice<&'a str>>>,
+{
+    alt((
+        delimited(
+            '"',
+            escaped(take_while(1.., |x| x != '\\' && x != '"'), '\\', any),
+            '"',
+        )
+        .with_span(),
+        delimited(
+            '\'',
+            escaped(take_while(1.., |x| x != '\\' && x != '\''), '\\', any),
+            '\'',
+        )
+        .with_span(),
+        escaped(
+            take_while(1.., |x| x != '\\' && x != ';' && x != ')'),
+            '\\',
+            any,
+        )
+        .with_span(),
+    ))
+    .parse_next(input)
+}
 
 /// Scans CSS content for @import and url(...) references, validates/rewrites them, and extracts them.
 ///
@@ -16,118 +56,47 @@ use crate::{
 /// * `(String, Vec<(Url, String)>)` - A tuple containing:
 ///   1. The rewritten CSS string with references updated to local filenames.
 ///   2. A vector of tuples pairing the fully resolved absolute URLs of discovered sub-resources with their generated local filenames.
-pub fn sanitize(
-    css: &str,
+pub fn sanitize<'a>(
+    input: &'a str,
     base_url: &Url,
     logger: &impl Log,
-    rule: &ReplaceRule<CssUrl>,
-) -> Result<(String, Vec<(Url, String)>), SanitizerError> {
-    let mut output = String::new();
+    policy: &Policy,
+) -> Result<(Cow<'a, str>, Vec<(Url, String)>), RuleError> {
+    let mut replacements = Vec::new();
     let mut extracted = Vec::new();
-    let chars: Vec<char> = css.chars().collect();
-    let mut i = 0;
+    let mut content = Partial::new(LocatingSlice::new(input));
 
-    fn skip_whitespace(chars: &[char], i: &mut usize) {
-        while *i < chars.len() && chars[*i].is_whitespace() {
-            *i += 1;
-        }
-    }
+    let mut parser = repeat_till(
+        0..,
+        any.map(drop),
+        alt((
+            delimited(("@import", multispace1), url_parser, (multispace0, ';')),
+            delimited(("url", space_around('(')), url_parser, (multispace0, ')')),
+        )),
+    )
+    .map(|x: (Vec<_>, _)| x.1);
 
-    fn read_url_string(chars: &[char], i: &mut usize, end: char) -> String {
-        let mut result = String::new();
+    while let Ok::<_, EmptyError>((url, location)) = parser.parse_next(&mut content) {
+        let clean = url.trim();
 
-        skip_whitespace(chars, i);
-
-        let delimiter = match chars.get(*i) {
-            Some('"') => Some('"'),
-            Some('\'') => Some('\''),
-            _ => None,
-        };
-        if delimiter.is_some() {
-            *i += 1;
-        }
-
-        let mut previous_backslash = false;
-
-        while let Some(&c) = chars.get(*i) {
-            if delimiter == Some(c) && !previous_backslash {
-                *i += 1;
-                break;
-            }
-
-            if c == end && delimiter.is_none() && !previous_backslash {
-                *i += 1;
-                break;
-            }
-
-            if c == '\\' {
-                if previous_backslash {
-                    previous_backslash = false;
-                    result.push('\\');
-                } else {
-                    previous_backslash = !previous_backslash;
-                }
-            } else {
-                previous_backslash = false;
-                result.push(c);
-            }
-
-            *i += 1;
-        }
-
-        skip_whitespace(chars, i);
-
-        result
-    }
-
-    while i < chars.len() {
-        // Match @import
-        if i + 7 < chars.len()
-            && chars[i..i + 7] == ['@', 'i', 'm', 'p', 'o', 'r', 't']
-            && (chars[i + 7].is_whitespace() || chars[i + 7] == '(')
-        {
-            i += 7;
-            skip_whitespace(&chars, &mut i);
-
-            let url = if i + 4 <= chars.len() && chars[i..i + 4] == ['u', 'r', 'l', '('] {
-                i += 4;
-                let url = read_url_string(&chars, &mut i, ')');
-
-                while let Some(&c) = chars.get(i)
-                    && c != ';'
-                {
-                    i += 1;
-                }
-                i += 1;
-
-                url
-            } else {
-                read_url_string(&chars, &mut i, ';')
-            };
-
-            let url_clean = url.trim().to_string();
-            if !url_clean.is_empty()
-                && let Ok(resolved_url) = base_url.join(&url_clean)
+        let processed = if is_dangerous_uri(clean) {
+            if let Some(replace) =
+                policy
+                    .html
+                    .dangerous_uris
+                    .handle(&url, location.clone(), logger)?
             {
-                let local_name = super::generate_local_filename(&resolved_url, "css");
-                extracted.push((resolved_url, local_name.clone()));
-                output.push_str(&format!("@import \"{}\";", local_name));
+                replace
+            } else {
+                url.to_owned()
             }
-            continue;
-        }
-
-        // Match url(
-        if i + 4 <= chars.len() && chars[i..i + 4] == ['u', 'r', 'l', '('] {
-            i += 4;
-            let offset = i;
-
-            let url = read_url_string(&chars, &mut i, ')');
-
-            let url_clean = url.trim().to_string();
-            if let Some(replace) = rule.check(&url_clean, offset..offset + url.len(), logger)? {
-                output.push_str(&format!("url(\"{replace}\")"));
-            } else if let Ok(resolved_url) = base_url.join(&url_clean) {
-                let ext = url_clean
+        } else if let Ok(resolved_url) = base_url.join(clean) {
+            if detect_idn(&resolved_url).is_some()
+                && let Some(replace) = policy.urls.idn.handle(&url, location.clone(), logger)?
+            {
+                replace
+            } else {
+                let ext = clean
                     .rsplit('.')
                     .next()
                     .unwrap_or("bin")
@@ -135,37 +104,44 @@ pub fn sanitize(
                     .next()
                     .unwrap_or("bin");
                 let local_name = super::generate_local_filename(&resolved_url, ext);
-                output.push_str(&format!("url(\"{}\")", local_name));
-                extracted.push((resolved_url, local_name));
-            } else {
-                output.push_str("url(\"\")");
+                extracted.push((resolved_url, local_name.clone()));
+                local_name
             }
-            continue;
-        }
+        } else {
+            "".to_owned()
+        };
 
-        output.push(chars[i]);
-        i += 1;
+        replacements.push((location, format!("\"{processed}\"")));
     }
 
-    Ok((output, extracted))
+    if replacements.is_empty() {
+        return Ok((Cow::from(input), extracted));
+    }
+
+    let mut output = input.to_owned();
+    for (location, replacement) in replacements.into_iter().rev() {
+        output.replace_range(location, &replacement);
+    }
+
+    Ok((Cow::from(output), extracted))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log::{LogLevel, NullLogger};
+    use crate::{
+        log::{LogLevel, NullLogger},
+        rules::ReplaceRule,
+    };
 
     #[test]
     fn test_sanitize() {
+        let mut policy = Policy::default();
+        policy.html.dangerous_domain = ReplaceRule::with_default(LogLevel::Warn);
+
         let base_url = Url::parse("https://example.com/dir/style.css").unwrap();
         let css = "body { background: url('img.png'); } @import 'common.css';";
-        let (rewritten, extracted) = sanitize(
-            css,
-            &base_url,
-            &NullLogger,
-            &ReplaceRule::with_default(LogLevel::Warn),
-        )
-        .unwrap();
+        let (rewritten, extracted) = sanitize(css, &base_url, &NullLogger, &policy).unwrap();
 
         assert!(rewritten.contains("url(\"sub_"));
         assert!(rewritten.contains("@import \"sub_"));
@@ -182,16 +158,17 @@ mod tests {
 
     #[test]
     fn test_sanitize_dangerous_uris() {
+        let mut policy = Policy::default();
+        policy.html.dangerous_domain = ReplaceRule::with_default(LogLevel::Warn);
+
         let base_url = Url::parse("https://example.com/style.css").unwrap();
-        let css = "body { background: url('data:image/png;base64,1234'); font: url('javascript:alert(1)'); }";
-        let (rewritten, extracted) = sanitize(
-            css,
-            &base_url,
-            &NullLogger,
-            &ReplaceRule::with_default(LogLevel::Warn),
-        )
-        .unwrap();
-        assert!(rewritten.contains("url(\"\")"));
+        let css = "\
+            body {\
+                background: url('data:image/png;base64,1234');\
+                font: url('javascript:alert(1)');\
+            }";
+        let (rewritten, extracted) = sanitize(css, &base_url, &NullLogger, &policy).unwrap();
+        assert!(rewritten.contains("url(\"#\")"));
         assert_eq!(extracted.len(), 0);
     }
 }

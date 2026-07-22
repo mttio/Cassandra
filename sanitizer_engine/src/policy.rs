@@ -1,4 +1,4 @@
-use std::{fmt::Debug, time::Duration};
+use std::{fmt::Debug, str::FromStr, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use url::Host;
@@ -32,6 +32,14 @@ impl Serialize for PolicyHost {
     }
 }
 
+impl FromStr for PolicyHost {
+    type Err = url::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Host::parse(s).map(Self)
+    }
+}
+
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct Policy {
@@ -41,18 +49,27 @@ pub struct Policy {
     pub connections: ConnectionsPolicy,
 }
 
+/// Rules for handling HTML files
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct HtmlPolicy {
-    pub allow_scripts: Vec<String>,
+    /// List of allowed script sources.
+    pub allow_scripts: Vec<PolicyHost>,
+    /// List of allowed origins for content tags
     pub allow_origins: Vec<PolicyHost>,
-    /// Action to perform when an event handler is encountered
+    /// Handles event handler attributes
     pub event_handlers: ReplaceRule<rules::EventHandlers>,
+    /// Handles custom xml entities (potential XML bomb)
+    pub xml_entities: ReplaceRule<rules::XmlEntities>,
+    /// Handles `<meta http-equiv="Refresh">` tags
+    pub meta_refresh: ReplaceRule<rules::MetaRefresh>,
+    /// Handles dangerous (not allowed) scripts in `<script>` tags
     pub dangerous_scripts: ReplaceRule<rules::DangerousScripts>,
+    /// Handles dangerous origins in `<iframe>` and `<object>` tags
     pub dangerous_origins: ReplaceRule<rules::DangerousOrigins>,
-    /// Rule for dangerous domains
+    /// Handles dangerous domains (see `urls.dangerous_domains`)
     pub dangerous_domain: ReplaceRule<rules::DangerousDomain2>,
-    /// Rule for dangerous URIs (javascript:, data:)
+    /// Handles dangerous URIs (`javascript:...`, `data:...`) in tag attributes
     pub dangerous_uris: ReplaceRule<rules::DangerousUris>,
 }
 
@@ -66,6 +83,8 @@ impl Default for HtmlPolicy {
                 .map(PolicyHost)
                 .collect(),
             event_handlers: ReplaceRule::with_default(LogLevel::Info),
+            xml_entities: ReplaceRule::with_default(LogLevel::Error),
+            meta_refresh: ReplaceRule::with_default(LogLevel::Warn),
             dangerous_scripts: ReplaceRule::with_default(LogLevel::Error),
             dangerous_origins: ReplaceRule::with_default(LogLevel::Error),
             dangerous_domain: ReplaceRule::with_default(LogLevel::Error),
@@ -74,14 +93,17 @@ impl Default for HtmlPolicy {
     }
 }
 
+/// Rules for handling URLs
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct UrlsPolicy {
-    /// List of domains considered dangerous
-    /// Ignores prefix labels (e.g. `youtube.com` matches `www.youtube.com`)
+    /// List of domains considered **dangerous**
+    /// Ignores prefix labels (e.g. `wikipedia.org` matches `www.wikipedia.org`)
     pub dangerous_domains: Vec<PolicyHost>,
-    /// Action to perform when a non-latin url is encountered
+    /// Handles IDN urls detected in files
     pub idn: ReplaceRule<rules::Idn>,
+    /// Handles connecting to IDN urls
+    pub idn_connection: LogLevel,
 }
 
 impl Default for UrlsPolicy {
@@ -93,22 +115,31 @@ impl Default for UrlsPolicy {
                 .map(PolicyHost)
                 .collect(),
             idn: ReplaceRule::with_default(LogLevel::Warn),
+            idn_connection: LogLevel::Warn,
         }
     }
 }
 
+/// Rules for handling resource files
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ResourcesPolicy {
+    /// Whether to fetch subresources references in processed files
     pub fetch_sub_resources: bool,
+    /// Maximum subresource depth
     pub max_depth: RuleWithValue<rules::MaxSubresourceDepth>,
-    pub max_bytes: RuleWithValue<rules::MaxBytes>,
+    /// Maximum subresource amount
     pub max_requests: RuleWithValue<rules::MaxSubresources>,
+    /// Maximum resource length
+    pub max_bytes: RuleWithValue<rules::MaxBytes>,
+    /// Handles mismatches MIME types
     pub mismatched_mime: LogLevel,
+    /// Handles unknown resource types
     pub unknown_resource: LogLevel,
+    /// Handles active content in PDF files
     pub pdf_active_content: LogLevel,
+    /// Handles dangerous constructs in JS files
     pub dangerous_js: ReplaceRule<rules::JsReplace>,
-    pub dangerous_css: ReplaceRule<rules::CssUrl>,
 }
 
 impl Default for ResourcesPolicy {
@@ -116,29 +147,31 @@ impl Default for ResourcesPolicy {
         Self {
             fetch_sub_resources: true,
             max_depth: RuleWithValue::with_default(LogLevel::Error),
-            max_bytes: RuleWithValue::with_default(LogLevel::Error),
             max_requests: RuleWithValue::with_default(LogLevel::Error),
+            max_bytes: RuleWithValue::with_default(LogLevel::Error),
             mismatched_mime: LogLevel::Error,
             unknown_resource: LogLevel::Error,
             pdf_active_content: LogLevel::Error,
             dangerous_js: ReplaceRule::with_default(LogLevel::Error),
-            dangerous_css: ReplaceRule::with_default(LogLevel::Warn),
         }
     }
 }
 
+/// Rules for handling http requests
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ConnectionsPolicy {
+    /// Maximum timeout for the connection phase of a request
     #[serde(with = "humantime_serde")]
     pub connection_timeout: Duration,
+    /// Maximum timeout for a request (including reading the body)
     #[serde(with = "humantime_serde")]
     pub overall_timeout: Duration,
-    /// Maximum number of redirects for a single connection
+    /// Maximum number of redirects for a single request
     pub max_redirects: RuleWithValue<rules::MaxRedirects>,
     /// User agent to include in every request
     pub user_agent: String,
-    /// Action to perform when connecting to a dangerous domain
+    /// Handles connections to dangerous domain (see `urls.dangerous_domains`)
     pub dangerous_domain: RuleWithValue<rules::DangerousDomain>,
 }
 

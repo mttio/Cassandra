@@ -1,4 +1,19 @@
-use itertools::Itertools;
+use std::borrow::Cow;
+
+use crate::resources::space_around;
+use winnow::{
+    LocatingSlice, Parser,
+    ascii::multispace0,
+    combinator::{alt, repeat_till},
+    error::EmptyError,
+    token::any,
+};
+
+use crate::{
+    errors::SanitizerError,
+    log::Log,
+    rules::{JsReplace, ReplaceRule},
+};
 
 /// Scans JS file for dangerous constructs (eval, document.write).
 ///
@@ -7,56 +22,62 @@ use itertools::Itertools;
 ///
 /// # Returns
 /// * `Result<(), SanitizationError>` - `Ok` if no dangerous keywords are found, otherwise an `Err` indicating what was found.
-pub fn sanitize(content: &str) -> Result<(), String> {
-    let mut chars = content.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == 'e' {
-            let mut temp = chars.clone();
-            if temp.next_array() == Some(['v', 'a', 'l']) {
-                while let Some(&next_c) = temp.peek() {
-                    if next_c.is_whitespace() {
-                        temp.next();
-                    } else {
-                        break;
-                    }
-                }
-                if temp.peek() == Some(&'(') {
-                    return Err("eval(...)".to_owned());
-                }
-            }
-        }
-        if c == 'd' {
-            let mut temp = chars.clone();
-            if temp.next_array() == Some(['o', 'c', 'u', 'm', 'e', 'n', 't']) {
-                let mut temp = temp.skip_while(|c| c.is_whitespace());
-                if temp.next() == Some('.') {
-                    let mut temp = temp.skip_while(|c| c.is_whitespace());
-                    if temp.next_array() == Some(['w', 'r', 'i', 't', 'e']) {
-                        return Err("document.write(...)".to_owned());
-                    }
-                }
-            }
+pub fn sanitize<'a>(
+    input: &'a str,
+    logger: &impl Log,
+    rule: &ReplaceRule<JsReplace>,
+) -> Result<Cow<'a, str>, SanitizerError> {
+    let mut content = LocatingSlice::new(input);
+
+    let mut parser = repeat_till(
+        0..,
+        any.map(drop),
+        (
+            alt((
+                "eval",
+                "alert",
+                ("document", space_around('.'), "write").take(),
+            )),
+            multispace0,
+            '(',
+        )
+            .take()
+            .with_span(),
+    )
+    .map(|x: (Vec<_>, _)| x.1);
+
+    while let Ok::<_, EmptyError>((value, location)) = parser.parse_next(&mut content) {
+        if let Some(replace) = rule.handle(format!("{value}..)"), location, logger)? {
+            return Ok(Cow::from(replace));
         }
     }
 
-    Ok(())
+    Ok(Cow::from(input))
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::log::NullLogger;
+
     use super::*;
 
     #[test]
     fn test_sanitize() {
-        assert!(sanitize("console.log('hello');").is_ok());
-        assert!(sanitize("eval('1 + 1');").is_err());
-        assert!(sanitize("document.write('xss');").is_err());
+        let rule = ReplaceRule::forbid();
+        let logger = NullLogger;
+
+        assert!(sanitize("console.log('hello');", &logger, &rule).is_ok());
+        assert!(sanitize("eval('1 + 1');", &logger, &rule).is_err());
+        assert!(sanitize("document.write('xss');", &logger, &rule).is_err());
     }
 
     #[test]
     fn test_sanitize_spaces() {
-        assert!(sanitize("eval    (  '1+1'  )").is_err());
-        assert!(sanitize("let evaluator = 1;").is_ok());
-        assert!(sanitize("document.write()").is_err());
+        let rule = ReplaceRule::forbid();
+        let logger = NullLogger;
+
+        assert!(sanitize("eval    (  '1+1'  ) eval()", &logger, &rule).is_err());
+        assert!(sanitize("let evaluator = 1;", &logger, &rule).is_ok());
+        assert!(sanitize("document   . write ()", &logger, &rule).is_err());
     }
 }

@@ -385,3 +385,10 @@ Il ridottissimo consumo di memoria è conseguenza diretta dell'approccio zero-co
    Miglioramento del client HTTP in modo da forzare il socket a connettersi unicamente all'indirizzo IP risolto e convalidato all'inizio, eliminando alla radice gli attacchi di rebind DNS.
 4. **Ricaricamento a Caldo delle Policy**:
    Utilizzo di librerie di monitoraggio del filesystem (es. il crate `notify`) per aggiornare le definizioni delle regole TOML in tempo reale senza dover interrompere e riavviare Cassandra.
+5. **Migliore posizionamento nei file**:
+   Gli errori che fanno riferimento al contenuto dei file usano un range di offset. Usare coppie righe/colonne sarebbe migliore, ma `lol_html` supporta solo offset (https://github.com/cloudflare/lol-html/issues/157).
+6. **Streamed parsing per altre risorse**:
+   Solo i file html vengono letti in streaming, le altre risorse vengono prima lette completamente e poi sanitizzate.
+   Non ci sono librerie simili a `lol_html` per altri linguaggi, ma si potrebbe utilizzare `winnow::stream`.
+7. **Supporto per altri tipi di risorse**:
+   Per esempio, il programma non supporta i file `svg`.

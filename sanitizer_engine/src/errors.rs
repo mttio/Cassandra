@@ -1,11 +1,37 @@
-use std::{fmt::Display, ops::Range, path::PathBuf};
+use std::{error::Error, fmt::Display, ops::Range, path::PathBuf};
 
-use colored::Colorize;
+use colored::{ColoredString, Colorize};
 use hickory_resolver::net::NetError;
 use lol_html::errors::RewritingError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use url::{Host, Url};
+use url::Host;
+
+use crate::InputSource;
+
+fn arrow() -> ColoredString {
+    "->".yellow()
+}
+
+// https://gist.github.com/dginev/f6da5e94335d545e0a7b
+fn truncate(mut input: String, maxsize: usize) -> (String, bool) {
+    let mut utf8_maxsize = input.len();
+    if utf8_maxsize >= maxsize {
+        {
+            let mut char_iter = input.char_indices();
+            while utf8_maxsize >= maxsize {
+                utf8_maxsize = match char_iter.next_back() {
+                    Some((index, _)) => index,
+                    _ => 0,
+                };
+            }
+        } // Extra {} wrap to limit the immutable borrow of char_indices()
+        input.truncate(utf8_maxsize);
+        (input, true)
+    } else {
+        (input, false)
+    }
+}
 
 fn format_range(range: &Range<usize>) -> String {
     format!(
@@ -16,12 +42,18 @@ fn format_range(range: &Range<usize>) -> String {
 }
 
 trait Pretty {
-    fn pretty(&self) -> colored::ColoredString;
+    fn pretty(&self) -> String;
 }
 
 impl<T: ToString> Pretty for T {
-    fn pretty(&self) -> colored::ColoredString {
-        self.to_string().bright_cyan()
+    fn pretty(&self) -> String {
+        let (string, truncated) = truncate(self.to_string(), 128);
+
+        if truncated {
+            format!("{}{}", string.bright_cyan(), "...".bright_cyan().dimmed())
+        } else {
+            string.bright_cyan().to_string()
+        }
     }
 }
 
@@ -29,22 +61,20 @@ impl<T: ToString> Pretty for T {
 #[error(transparent)]
 #[serde(tag = "type")]
 pub enum RuleError {
-    #[error("too many redirects (max = {})", max.pretty())]
+    #[error("Too many redirects (max = {})", max.pretty())]
     #[serde(rename = "too_many_redirects")]
     TooManyRedirects { max: usize },
-    #[error("connecting to dangerous domain ({})", original.pretty())]
+    #[error(
+        "Connecting to IDN host: `{}` {} `{}`",
+        original.pretty(),
+        arrow(),
+        converted.pretty(),
+    )]
+    #[serde(rename = "idn_connection")]
+    IdnConnection { original: String, converted: String },
+    #[error("Connecting to dangerous domain ({})", original.pretty())]
     #[serde(rename = "dangerous_domain_connection")]
     DangerousDomainConnection { original: Host },
-    #[error(
-        "blocked meta refresh (content = {}) {}",
-        original.pretty(),
-        format_range(offset),
-    )]
-    #[serde(rename = "meta_refresh")]
-    BlockedMetaRefresh {
-        original: String,
-        offset: Range<usize>,
-    },
     #[error(
         "MIME mismatch (expected = {}, actual = {})",
         expected.as_deref().unwrap_or("<none>").pretty(),
@@ -55,21 +85,21 @@ pub enum RuleError {
         expected: Option<String>,
         actual: Option<String>,
     },
-    #[error("response body exceeds maximum size ({} bytes)", max.pretty())]
+    #[error("Response body exceeds maximum size ({} bytes)", max.pretty())]
     #[serde(rename = "content_too_long")]
     ContentTooLong { max: usize },
-    #[error("Sub-resource crawl limit reached: max_requests = {}", max.pretty())]
+    #[error("Sub-resource amount limit reached: max_requests = {}", max.pretty())]
     #[serde(rename = "too_many_subresources")]
     MaxSubresources { max: usize },
-    #[error("Sub-resource crawl depth limit reached: max_requests = {}", max.pretty())]
+    #[error("Sub-resource depth limit reached: max_requests = {}", max.pretty())]
     #[serde(rename = "subresources_too_deep")]
     MaxSubresourceDepth { max: usize },
-    #[error("custom XML entity declaration detected (potential XML bomb)")]
-    #[serde(rename = "xml_entity_declaration")]
-    XmlEntityDeclaration,
-    #[error("embedded active content ({original}) detected")]
+    #[error("Pdf active content: `{}` {}", original.pretty(), format_range(location))]
     #[serde(rename = "active_content")]
-    ActiveContent { original: String },
+    PdfActiveContent {
+        original: String,
+        location: Range<usize>,
+    },
     #[error("Unknown resource type: `{}`", match mime {
         Some(x) => x.pretty(),
         None => "<none>".pretty(),
@@ -77,19 +107,21 @@ pub enum RuleError {
     #[serde(rename = "unknown_resources")]
     UnknownResourceType { mime: Option<String> },
     #[error(
-        "{inner}{} {}",
+        "{inner}: `{}`{} {}",
+        original.pretty(),
         match replacement {
-            Some(x) => format!(" {} `{}`", "->".bright_yellow(), x.pretty()),
+            Some(x) => format!(" {} `{}`", arrow(), x.pretty()),
             None => "".to_owned(),
         },
-        format_range(offset),
+        format_range(location),
     )]
     #[serde(untagged)]
     Replace {
         #[serde(flatten)]
         inner: RuleReplaceError,
+        original: String,
         replacement: Option<String>,
-        offset: Range<usize>,
+        location: Range<usize>,
     },
 }
 
@@ -97,42 +129,33 @@ pub enum RuleError {
 #[error(transparent)]
 #[serde(tag = "type")]
 pub enum RuleReplaceError {
-    #[error("event handler: `{}`", original.pretty())]
+    #[error("Event handler")]
     #[serde(rename = "event_handlers")]
-    EventHandler { original: String },
-    #[error("dangerous script: `{}`",
-        match original {
-            Some(x) => x.pretty(),
-            None => "<inline>".pretty()
-        },
-    )]
+    EventHandler,
+    #[error("Meta refresh")]
+    #[serde(rename = "meta_refresh")]
+    MetaRefresh,
+    #[error("Dangerous script")]
     #[serde(rename = "dangerous_scripts")]
-    DangerousScript { original: Option<String> },
-    #[error(
-        "dangerous origin (tag = {}): `{}`",
-        tag.pretty(),
-        original.pretty(),
-    )]
+    DangerousScript,
+    #[error("Dangerous origin")]
     #[serde(rename = "dangerous_origins")]
-    DangerousOrigin { tag: String, original: String },
-    #[error("dangerous domain: `{}`", original.pretty())]
+    DangerousOrigin,
+    #[error("Dangerous domain")]
     #[serde(rename = "dangerous_domain")]
-    DangerousDomain { original: Host },
-    #[error("dangerous URI: `{}`", original.pretty())]
+    DangerousDomain,
+    #[error("Dangerous URI")]
     #[serde(rename = "dangerous_uris")]
-    DangerousUri { original: String },
-    #[error("IDN url: `{}`", original.pretty())]
+    DangerousUri,
+    #[error("Custom XML entity declaration (potential XML bomb)")]
+    #[serde(rename = "xml_entity_declaration")]
+    XmlEntityDeclaration,
+    #[error("IDN host")]
     #[serde(rename = "idn")]
-    Idn { original: String },
-    #[error("Dangerous construct detected in JS: `{}`", original.pretty())]
+    Idn,
+    #[error("Dangerous JS construct")]
     #[serde(rename = "dangerous_js")]
-    DangerousJsConstruct { original: String },
-    #[error(
-        "Dangerous construct detected in CSS: `{}`",
-        original.pretty(),
-    )]
-    #[serde(rename = "dangerous_css")]
-    DangerousCssConstruct { original: String },
+    DangerousJsConstruct,
 }
 
 /// An error that the sanitizer can produce
@@ -149,8 +172,6 @@ pub enum SanitizerError {
     NonHttpsUrl,
     #[error("Server returned error status: {0}")]
     ServerStatus(reqwest::StatusCode),
-    #[error("Failed to fetch {} {}: {}", if *.2 { "sub-resource" } else { "url" }, .0, .1)]
-    UrlFetch(Url, Box<Self>, bool),
     #[error("Rewriting error: {0}")]
     Rewriting(#[source] RewritingError),
     #[error("Failed to open file: {0} ({1})")]
@@ -163,8 +184,8 @@ pub enum SanitizerError {
     WriteFile(PathBuf, std::io::Error),
     #[error("Error while streaming body: {0}")]
     Streaming(reqwest::Error),
-    #[error("Request failed for URL {0}: {1}")]
-    Request(Url, reqwest::Error),
+    #[error("Http request failed: {0}")]
+    Request(reqwest::Error),
     #[error("{0}")]
     Rule(#[source] RuleError),
     Other(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
@@ -174,21 +195,36 @@ pub enum SanitizerError {
 #[derive(Debug)]
 pub enum SanitizerMessage {
     Error(SanitizerError),
-    CrawlingSubresource { depth: usize, url: Url },
+    CrawlingSubresource {
+        depth: usize,
+        remote: InputSource,
+        local: String,
+    },
+    ResourceCompleted,
 }
 
 impl Display for SanitizerMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Error(e) => write!(f, "{e}"),
-            Self::CrawlingSubresource { depth, url } => {
+            Self::CrawlingSubresource {
+                depth,
+                remote,
+                local,
+            } => {
                 write!(
                     f,
-                    "Crawling sub-resource (depth {}): {}",
-                    depth,
-                    url.to_string().bright_blue()
+                    "Crawling sub-resource (depth {}): {} {} {}",
+                    depth.pretty(),
+                    match remote {
+                        InputSource::File(remote) => remote.to_string_lossy().bright_cyan(),
+                        InputSource::Url(remote) => remote.to_string().bright_blue(),
+                    },
+                    arrow(),
+                    local.bright_cyan(),
                 )
             }
+            SanitizerMessage::ResourceCompleted => write!(f, "Resource completed!"),
         }
     }
 }
@@ -204,12 +240,9 @@ impl From<RewritingError> for SanitizerError {
         match value {
             RewritingError::ContentHandlerError(e) => {
                 // Extract the error returned inside the `element!()` macro
-                match e.downcast::<Self>() {
-                    Ok(err) => *err,
-                    Err(e) => match e.downcast::<RuleError>() {
-                        Ok(err) => Self::Rule(*err),
-                        Err(e) => Self::Other(e),
-                    }
+                match e.downcast::<RuleError>() {
+                    Ok(e) => Self::Rule(*e),
+                    Err(e) => Self::Other(e),
                 }
             }
             RewritingError::MemoryLimitExceeded(e) => Self::Other(Box::new(e)),
@@ -218,14 +251,17 @@ impl From<RewritingError> for SanitizerError {
     }
 }
 
+impl From<reqwest::Error> for SanitizerError {
+    fn from(value: reqwest::Error) -> Self {
+        match value.source().and_then(|x| x.downcast_ref::<RuleError>()) {
+            Some(x) => Self::Rule(x.clone()),
+            None => Self::Request(value),
+        }
+    }
+}
+
 impl From<RuleError> for SanitizerError {
     fn from(value: RuleError) -> Self {
         Self::Rule(value)
     }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct SanitizationReport {
-    pub input: String,
-    pub actions: Vec<RuleError>,
 }

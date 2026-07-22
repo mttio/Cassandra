@@ -1,59 +1,21 @@
-use itertools::Itertools;
 use url::{Host, Url};
 
-pub fn check_domain(url: &Url) -> Option<String> {
+/// Detects if a `Url` host was originally an [Internationalized Domain Name](https://en.wikipedia.org/wiki/Internationalized_domain_name) (the `url` crate automatically performs the conversion)
+/// If so, returns:
+/// - the original host name
+/// - the punycode-converted host name
+pub fn detect_idn(url: &Url) -> Option<(&str, &str)> {
     if let Some(Host::Domain(domain, original)) = url.host()
         && domain != original
     {
-        let domain = Iterator::zip(domain.split('.'), original.split('.'))
-            .map(|(parsed, original)| {
-                if let Some(parsed) = parsed.strip_prefix("xn--") {
-                    let mut result = String::new();
-                    let mut original = original.chars();
-
-                    'outer: for p in parsed.chars() {
-                        for o in original.by_ref() {
-                            if o == p {
-                                result.push(o);
-                                continue 'outer;
-                            } else if o.to_ascii_lowercase() == p {
-                                result.push_str("\x1b[95;1m");
-                                result.push(o);
-                                result.push_str("\x1b[0m");
-                                continue 'outer;
-                            } else {
-                                result.push_str("\x1b[91;1m");
-                                result.push(o);
-                                result.push_str("\x1b[0m");
-                            }
-                        }
-                    }
-                    result
-                } else {
-                    let mut result = String::new();
-
-                    for o in original.chars() {
-                        if o.is_ascii_uppercase() {
-                            result.push_str("\x1b[95;1m");
-                            result.push(o);
-                            result.push_str("\x1b[0m");
-                        } else {
-                            result.push(o);
-                        }
-                    }
-                    result
-                }
-            })
-            .join(".");
-
-        Some(domain)
+        Some((original, domain))
     } else {
         None
     }
 }
 
 /// Checks if a given host matches a host specified in the policy
-/// Ignores prefix labels (e.g. `youtube.com` matches `www.youtube.com`)
+/// Ignores prefix labels (e.g. `wikipedia.org` matches `www.wikipedia.org`)
 pub fn host_matches(host: &Host, target: &Host) -> bool {
     match (host, target) {
         (Host::Domain(host, _), Host::Domain(target, _)) => {
@@ -66,5 +28,47 @@ pub fn host_matches(host: &Host, target: &Host) -> bool {
         (Host::Ipv4(a), Host::Ipv4(b)) => a == b,
         (Host::Ipv6(a), Host::Ipv6(b)) => a == b,
         _ => false,
+    }
+}
+
+pub fn is_dangerous_uri(uri: &str) -> bool {
+    uri.starts_with("data:") || uri.starts_with("javascript:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_idn() {
+        let hosts = [
+            ("wikipedia.org", None),
+            ("wіkіреdіа.org", Some("xn--wkd-8cdx9d7hbd.org")),
+            ("рф", Some("xn--p1ai")),
+            ("Bücher.example", Some("xn--bcher-kva.example")),
+        ];
+
+        for (original, expected) in hosts {
+            let url = Url::parse(&format!("https://{original}")).unwrap();
+            let actual = super::detect_idn(&url);
+            assert_eq!(actual, expected.map(|x| (original, x)));
+        }
+    }
+
+    #[test]
+    fn host_matches() {
+        let hosts = [
+            ("www.wikipedia.org", "wikipedia.org", true),
+            ("www.wikipedia.org", "org", true),
+            ("www.wikipedia.org", ".org", false),
+            ("google.com", "youtube.com", false),
+        ];
+
+        for (left, right, result) in hosts {
+            let left = Host::parse(left).unwrap();
+            let right = Host::parse(right).unwrap();
+
+            assert_eq!(super::host_matches(&left, &right), result);
+        }
     }
 }

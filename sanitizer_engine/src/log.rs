@@ -5,20 +5,20 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
-use chrono::Local;
+use chrono::{DateTime, Local};
 use colored::Colorize;
 use itertools::Itertools;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::InputSource;
-use crate::errors::{RuleError, SanitizerMessage};
+use crate::errors::{RuleError, SanitizerError, SanitizerMessage};
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum LogLevel {
+    Ignore,
     Trace,
-    Debug,
     Info,
     Warn,
     Error,
@@ -37,17 +37,12 @@ impl LogLevel {
 }
 
 /// A trait for logging messages
-pub trait Log: Sync {
+pub trait Log: Sync + Clone {
     fn log<T: Into<SanitizerMessage>>(&self, level: LogLevel, message: T);
 
     #[inline]
     fn trace<T: Into<SanitizerMessage>>(&self, message: T) {
         self.log(LogLevel::Trace, message);
-    }
-
-    #[inline]
-    fn debug<T: Into<SanitizerMessage>>(&self, message: T) {
-        self.log(LogLevel::Debug, message);
     }
 
     #[inline]
@@ -65,7 +60,55 @@ pub trait Log: Sync {
         self.log(LogLevel::Error, message);
     }
 
+    /// Creates a new logger for a different subresource
     fn subresource(&self, index: usize) -> Self;
+
+    // Creates a new logger with an offset, for nested content
+    fn inner_content(&self, offset: usize) -> LoggerWithOffset<Self> {
+        LoggerWithOffset {
+            offset,
+            inner: self.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LoggerWithOffset<T> {
+    offset: usize,
+    inner: T,
+}
+
+impl<L: Log> Log for LoggerWithOffset<L> {
+    fn log<T: Into<SanitizerMessage>>(&self, level: LogLevel, message: T) {
+        let message = message.into();
+
+        if let SanitizerMessage::Error(SanitizerError::Rule(RuleError::Replace {
+            inner,
+            original,
+            replacement,
+            location,
+        })) = message
+        {
+            self.inner.log(
+                level,
+                RuleError::Replace {
+                    inner,
+                    original,
+                    replacement,
+                    location: location.start + self.offset..location.end + self.offset,
+                },
+            );
+        } else {
+            self.inner.log(level, message);
+        }
+    }
+
+    fn subresource(&self, index: usize) -> Self {
+        LoggerWithOffset {
+            offset: self.offset,
+            inner: self.inner.subresource(index),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -141,7 +184,7 @@ impl Log for VecLogger {
 }
 
 /// A logger that discards all messages
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct NullLogger;
 
 impl Log for NullLogger {
@@ -152,6 +195,21 @@ impl Log for NullLogger {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SanitizationReport {
+    pub input: String,
+    pub start: DateTime<Local>,
+    pub end: Option<DateTime<Local>>,
+    pub actions: Vec<ErrorWithTimestamp>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ErrorWithTimestamp {
+    timestamp: DateTime<Local>,
+    #[serde(flatten)]
+    pub error: RuleError,
+}
+
 pub fn logging_thread(
     output: &Path,
     console_level: LogLevel,
@@ -160,11 +218,13 @@ pub fn logging_thread(
     max_subresources: usize,
     channel: Receiver<LoggerMessage>,
 ) -> (bool, f64, f64) {
-    use crate::errors::{SanitizationReport, SanitizerError};
+    use crate::errors::SanitizerError;
 
     struct Subresource {
         source: Option<InputSource>,
-        errors: Vec<RuleError>,
+        start: DateTime<Local>,
+        end: Option<DateTime<Local>>,
+        errors: Vec<ErrorWithTimestamp>,
     }
 
     struct Source {
@@ -174,13 +234,14 @@ pub fn logging_thread(
 
     let mut sources = sources
         .iter()
-        .enumerate()
-        .map(|(_i, x)| Source {
+        .map(|x| Source {
             log_lines: Vec::new(),
             subresources: BTreeMap::from([(
                 0,
                 Subresource {
                     source: Some(x.clone()),
+                    start: Local::now(),
+                    end: None,
                     errors: Vec::new(),
                 },
             )]),
@@ -188,7 +249,7 @@ pub fn logging_thread(
         .collect_vec();
 
     let width1 = (sources.len() as f64).log10().ceil() as usize;
-    let width2 = (max_subresources as f64).log10().ceil() as usize;
+    let width2 = ((max_subresources + 1) as f64).log10().ceil() as usize;
     let mut has_errors = false;
 
     let start_loop = std::time::Instant::now();
@@ -202,12 +263,10 @@ pub fn logging_thread(
             .entry(msg.subresource)
             .or_insert_with(|| Subresource {
                 source: None,
+                start: Local::now(),
+                end: None,
                 errors: Vec::new(),
             });
-
-        if let SanitizerMessage::CrawlingSubresource { url, .. } = &msg.message {
-            subresource.source = Some(InputSource::Url(url.clone()));
-        }
 
         if msg.level == LogLevel::Error {
             has_errors = true;
@@ -217,16 +276,16 @@ pub fn logging_thread(
 
         if msg.level >= console_level {
             println!(
-                "[{}{}] {}: {}",
+                "[{}/{}] {}: {}",
                 format!("{:>width1$}", msg.source).bold().bright_blue(),
-                if msg.subresource == 0 {
-                    " ".repeat(width2 + 1)
-                } else {
-                    format!("/{:0>width2$}", msg.subresource.to_string().bold().blue())
-                },
+                match msg.subresource {
+                    0 => "-".repeat(width2).bright_black(),
+                    x => format!("{:0>width2$}", x).blue(),
+                }
+                .bold(),
                 match msg.level {
+                    LogLevel::Ignore => "     ".black(),
                     LogLevel::Trace => "TRACE".bright_black(),
-                    LogLevel::Debug => "DEBUG".bright_blue(),
                     LogLevel::Info => " INFO".bright_green(),
                     LogLevel::Warn => " WARN".bright_yellow(),
                     LogLevel::Error => "ERROR".bright_red(),
@@ -239,17 +298,16 @@ pub fn logging_thread(
         if msg.level >= file_level {
             let now = Local::now().naive_local();
             let line = format!(
-                "({}) [{:>width1$}{}] {}: {}",
+                "({}) [{:>width1$}/{}] {}: {}",
                 now.format("%Y-%m-%d %H:%M:%S%.3f"),
                 msg.source,
-                if msg.subresource == 0 {
-                    " ".repeat(width2 + 1)
-                } else {
-                    format!("/{:0>width2$}", msg.subresource)
+                match msg.subresource {
+                    0 => "-".repeat(width2),
+                    x => format!("{:0>width2$}", x),
                 },
                 match msg.level {
+                    LogLevel::Ignore => "     ",
                     LogLevel::Trace => "TRACE",
-                    LogLevel::Debug => "DEBUG",
                     LogLevel::Info => " INFO",
                     LogLevel::Warn => " WARN",
                     LogLevel::Error => "ERROR",
@@ -259,11 +317,24 @@ pub fn logging_thread(
             source.log_lines.push(line);
         }
 
-        // Collect sanitization action events if the message contains one
-        if let SanitizerMessage::Error(SanitizerError::Rule(err)) = msg.message {
-            subresource.errors.push(err);
+        match msg.message {
+            SanitizerMessage::CrawlingSubresource { remote, .. } => {
+                subresource.source = Some(remote);
+            }
+            SanitizerMessage::ResourceCompleted => {
+                subresource.end = Some(Local::now());
+            }
+            SanitizerMessage::Error(SanitizerError::Rule(error)) if msg.level >= file_level => {
+                // Collect sanitization action events if the message contains one
+                subresource.errors.push(ErrorWithTimestamp {
+                    timestamp: Local::now(),
+                    error,
+                });
+            }
+            _ => (),
         }
     }
+
     let loop_elapsed = start_loop.elapsed().as_secs_f64();
 
     let start_write = std::time::Instant::now();
@@ -293,6 +364,8 @@ pub fn logging_thread(
 
                 SanitizationReport {
                     input: input_source_str,
+                    start: subresource.start,
+                    end: subresource.end,
                     actions: subresource.errors,
                 }
             })
@@ -314,7 +387,7 @@ pub fn logging_thread(
 mod tests {
     use super::*;
     use crate::crawl_session::CrawlSession;
-    use crate::errors::RuleReplaceError;
+    use crate::errors::{RuleReplaceError, SanitizerError};
     use crate::http_client::SanitizerHttpClient;
     use crate::policy::Policy;
     use parking_lot::Mutex;
@@ -332,7 +405,7 @@ mod tests {
         )
         .unwrap();
 
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, _) = std::sync::mpsc::channel();
         let logger = ChannelLogger {
             index: 0,
             subresource: 0,
@@ -356,28 +429,31 @@ mod tests {
             url_map,
         ));
 
-        session.process_file(file_path.clone());
+        let result = session.process_file(file_path.clone());
 
         // Clean up temp file
         let _ = fs::remove_file(file_path);
 
         // Retrieve the logged error
-        let msg = rx.try_recv().expect("Expected a log message");
-        let err_str = msg.message.to_string();
-        assert!(err_str.contains("custom XML entity declaration detected"));
+        std::assert_matches!(
+            result,
+            Err(SanitizerError::Rule(RuleError::Replace {
+                inner: RuleReplaceError::XmlEntityDeclaration,
+                ..
+            }))
+        );
     }
 
     #[test]
     fn test_sanitization_report_generation() {
-        use crate::errors::{RuleError, SanitizationReport};
+        use crate::errors::RuleError;
         use std::path::PathBuf;
 
         let err = RuleError::Replace {
-            inner: RuleReplaceError::DangerousScript {
-                original: Some("evil_script()".to_owned()),
-            },
+            inner: RuleReplaceError::DangerousScript,
+            original: "evil_script()".to_owned(),
             replacement: None,
-            offset: 10..20,
+            location: 10..20,
         };
         // let event = err.to_event();
         // assert_eq!(event.rule, "allow_scripts");
@@ -415,8 +491,11 @@ mod tests {
         assert_eq!(report.actions.len(), 1);
         assert!(matches!(
             report.actions[0],
-            RuleError::Replace {
-                inner: RuleReplaceError::DangerousScript { .. },
+            ErrorWithTimestamp {
+                error: RuleError::Replace {
+                    inner: RuleReplaceError::DangerousScript,
+                    ..
+                },
                 ..
             }
         ));

@@ -10,9 +10,9 @@ use tokio::runtime::Runtime;
 
 use crate::{
     crawl_session::CrawlSession,
-    errors::SanitizerError,
+    errors::{SanitizerError, SanitizerMessage},
     http_client::SanitizerHttpClient,
-    log::{ChannelLogger, LoggerMessage},
+    log::{ChannelLogger, Log, LoggerMessage},
     policy::Policy,
 };
 
@@ -26,7 +26,7 @@ pub mod resources;
 pub mod rules;
 pub mod url;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum InputSource {
     File(PathBuf),
     Url(Url),
@@ -78,8 +78,20 @@ pub fn library(
         ));
 
         match source {
-            InputSource::Url(url) => runtime.spawn(async { session.process_url(url).await }),
-            InputSource::File(path) => runtime.spawn(lazy(move |_| session.process_file(path))),
+            InputSource::Url(url) => runtime.spawn(async move {
+                if let Err(e) = session.process_url(url).await {
+                    session.logger.error(e);
+                } else {
+                    session.logger.info(SanitizerMessage::ResourceCompleted);
+                }
+            }),
+            InputSource::File(path) => runtime.spawn(lazy(move |_| {
+                if let Err(e) = session.process_file(path) {
+                    session.logger.error(e);
+                } else {
+                    session.logger.info(SanitizerMessage::ResourceCompleted);
+                }
+            })),
         };
     }
 
