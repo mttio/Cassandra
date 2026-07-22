@@ -4,12 +4,12 @@ local HTML/asset files, a directory tree, or a list of URLs to fetch
 */
 
 use anyhow::{Context, Result};
-use clap::{ArgAction, Parser};
-use colored::Colorize;
-use std::fs::{self};
 use cassandra::InputSource;
 use cassandra::log::{LogLevel, logging_thread};
 use cassandra::policy::Policy;
+use clap::{ArgAction, Parser};
+use colored::Colorize;
+use std::fs::{self};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -184,7 +184,6 @@ pub fn run(args: Args) -> Result<bool> {
         0 => LogLevel::Error,
         1 => LogLevel::Warn,
         2 => LogLevel::Info,
-        3 => LogLevel::Debug,
         _ => LogLevel::Trace,
     };
 

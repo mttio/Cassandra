@@ -1,16 +1,16 @@
-# List of rules that the sanitizer follows
+# Configuration for the sanitizer
 #
 #
 # Most rules have an associated severity level. The levels are:
-# - debug
+# - ignore
 # - trace
 # - info
 # - warn
 # - error
 #
 # When the program detects a violation of a rule:
-# - if the rule is configured with `error`, the program stops processing the resource
-# - otherwise, the violation is only logged
+# - if its level is anything but `ignore`, the violation is logged
+# - also, if its level is `error`, the program stops processing the resource
 #
 #
 # Some rules (marked with *Replaceable*) can be configured with a custom replacement message.

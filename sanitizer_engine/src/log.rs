@@ -17,8 +17,8 @@ use crate::errors::{RuleError, SanitizerError, SanitizerMessage};
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum LogLevel {
+    Ignore,
     Trace,
-    Debug,
     Info,
     Warn,
     Error,
@@ -43,11 +43,6 @@ pub trait Log: Sync + Clone {
     #[inline]
     fn trace<T: Into<SanitizerMessage>>(&self, message: T) {
         self.log(LogLevel::Trace, message);
-    }
-
-    #[inline]
-    fn debug<T: Into<SanitizerMessage>>(&self, message: T) {
-        self.log(LogLevel::Debug, message);
     }
 
     #[inline]
@@ -289,8 +284,8 @@ pub fn logging_thread(
                 }
                 .bold(),
                 match msg.level {
+                    LogLevel::Ignore => "     ".black(),
                     LogLevel::Trace => "TRACE".bright_black(),
-                    LogLevel::Debug => "DEBUG".bright_blue(),
                     LogLevel::Info => " INFO".bright_green(),
                     LogLevel::Warn => " WARN".bright_yellow(),
                     LogLevel::Error => "ERROR".bright_red(),
@@ -311,8 +306,8 @@ pub fn logging_thread(
                     x => format!("{:0>width2$}", x),
                 },
                 match msg.level {
+                    LogLevel::Ignore => "     ",
                     LogLevel::Trace => "TRACE",
-                    LogLevel::Debug => "DEBUG",
                     LogLevel::Info => " INFO",
                     LogLevel::Warn => " WARN",
                     LogLevel::Error => "ERROR",
@@ -329,7 +324,7 @@ pub fn logging_thread(
             SanitizerMessage::ResourceCompleted => {
                 subresource.end = Some(Local::now());
             }
-            SanitizerMessage::Error(SanitizerError::Rule(error)) => {
+            SanitizerMessage::Error(SanitizerError::Rule(error)) if msg.level >= file_level => {
                 // Collect sanitization action events if the message contains one
                 subresource.errors.push(ErrorWithTimestamp {
                     timestamp: Local::now(),
